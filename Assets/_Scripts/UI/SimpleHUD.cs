@@ -1,0 +1,70 @@
+using UnityEngine;
+using UnityEngine.UI;
+
+public class SimpleHUD : MonoBehaviour
+{
+    [SerializeField] private Text regolithText;
+    [SerializeField] private Text oxygenText;
+    [SerializeField] private Text promptText;
+    [SerializeField] private Text objectiveText;
+    [SerializeField] private Text winText;
+
+    private void Awake()
+    {
+        SetInventory(0, 0);
+        SetPrompt(string.Empty);
+
+        if (winText != null)
+        {
+            winText.gameObject.SetActive(false);
+        }
+    }
+
+    public void SetInventory(int regolith, int oxygen)
+    {
+        if (regolithText != null)
+        {
+            regolithText.text = $"Regolith: {regolith}";
+        }
+
+        if (oxygenText != null)
+        {
+            oxygenText.text = $"Oxygen: {oxygen}";
+        }
+    }
+
+    public void SetPrompt(string text)
+    {
+        if (promptText != null)
+        {
+            promptText.text = text;
+            promptText.enabled = !string.IsNullOrWhiteSpace(text);
+        }
+    }
+
+    public void SetObjective(string text)
+    {
+        if (objectiveText != null)
+        {
+            objectiveText.text = text;
+        }
+    }
+
+    public void ShowWin(string text)
+    {
+        if (winText != null)
+        {
+            winText.text = text;
+            winText.gameObject.SetActive(true);
+        }
+    }
+
+    public void Bind(Text regolith, Text oxygen, Text prompt, Text objective, Text win)
+    {
+        regolithText = regolith;
+        oxygenText = oxygen;
+        promptText = prompt;
+        objectiveText = objective;
+        winText = win;
+    }
+}
