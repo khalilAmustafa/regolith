@@ -120,21 +120,17 @@ public static class MixamoAnimationSetup
             controller = AnimatorController.CreateAnimatorControllerAtPath(ControllerPath);
         }
 
-        EnsureParameter(controller, "Speed", AnimatorControllerParameterType.Float);
-        EnsureParameter(controller, "IsGrounded", AnimatorControllerParameterType.Bool);
-        EnsureParameter(controller, "VerticalVelocity", AnimatorControllerParameterType.Float);
-        EnsureParameter(controller, "Jump", AnimatorControllerParameterType.Trigger);
-        RemoveParameterIfExists(controller, "Grounded");
+        EnsureExactParameters(controller);
 
         AnimatorStateMachine stateMachine = controller.layers[0].stateMachine;
         ClearStateMachine(stateMachine);
 
-        AnimationClip idle = FindClip("Idle");
-        AnimationClip walking = FindClip("Walking", "Walk");
+        AnimationClip idle = FindClipByFileName("Idle");
+        AnimationClip walking = FindClipByFileName("Walking", "Walk");
         AnimationClip running = FindClip("Standard Run", "Running", "Run");
-        AnimationClip jumpingUp = FindClip("Jumping Up");
-        AnimationClip fallingIdle = FindClip("Falling Idle");
-        AnimationClip fallingToLanding = FindClip("Falling To Landing");
+        AnimationClip jumpingUp = FindClipByFileName("Jumping Up");
+        AnimationClip fallingIdle = FindClipByFileName("Falling Idle");
+        AnimationClip fallingToLanding = FindClipByFileName("Falling To Landing");
 
         SetClipLooping(running, true);
         SetClipLooping(fallingIdle, true);
@@ -145,49 +141,53 @@ public static class MixamoAnimationSetup
         locomotion.motion = CreateLocomotionMotion(controller, idle, walking, running);
         stateMachine.defaultState = locomotion;
 
-        AnimatorState jumpUp = AddStateIfClipExists(stateMachine, "JumpUp", jumpingUp, new Vector3(540f, 20f, 0f));
-        AnimatorState fallLoop = AddStateIfClipExists(stateMachine, "FallLoop", fallingIdle, new Vector3(540f, 120f, 0f));
-        AnimatorState land = AddStateIfClipExists(stateMachine, "Land", fallingToLanding, new Vector3(540f, 220f, 0f));
+        AnimatorState jumpStart = AddStateIfClipExists(stateMachine, "JumpStart", jumpingUp, new Vector3(540f, 20f, 0f));
+        AnimatorState falling = AddStateIfClipExists(stateMachine, "Falling", fallingIdle, new Vector3(540f, 120f, 0f));
+        AnimatorState landing = AddStateIfClipExists(stateMachine, "Landing", fallingToLanding, new Vector3(540f, 220f, 0f));
 
-        if (jumpUp != null)
+        if (jumpStart != null)
         {
-            AnimatorStateTransition transition = locomotion.AddTransition(jumpUp);
+            AnimatorStateTransition transition = locomotion.AddTransition(jumpStart);
             transition.hasExitTime = false;
             transition.duration = 0.05f;
             transition.AddCondition(AnimatorConditionMode.If, 0f, "Jump");
         }
 
-        if (jumpUp != null && fallLoop != null)
+        if (jumpStart != null && falling != null)
         {
-            AnimatorStateTransition transition = jumpUp.AddTransition(fallLoop);
-            transition.hasExitTime = false;
-            transition.duration = 0.1f;
-            transition.AddCondition(AnimatorConditionMode.Less, 0.1f, "VerticalVelocity");
+            AnimatorStateTransition exitTransition = jumpStart.AddTransition(falling);
+            exitTransition.hasExitTime = true;
+            exitTransition.exitTime = 0.35f;
+            exitTransition.duration = 0.1f;
+
+            AnimatorStateTransition airborneTransition = jumpStart.AddTransition(falling);
+            airborneTransition.hasExitTime = false;
+            airborneTransition.duration = 0.1f;
+            airborneTransition.AddCondition(AnimatorConditionMode.IfNot, 0f, "Grounded");
         }
 
-        if (fallLoop != null)
+        if (falling != null)
         {
-            AnimatorStateTransition transition = stateMachine.AddAnyStateTransition(fallLoop);
+            AnimatorStateTransition transition = locomotion.AddTransition(falling);
             transition.hasExitTime = false;
             transition.duration = 0.1f;
-            transition.canTransitionToSelf = false;
-            transition.AddCondition(AnimatorConditionMode.IfNot, 0f, "IsGrounded");
-            transition.AddCondition(AnimatorConditionMode.Less, -0.2f, "VerticalVelocity");
+            transition.AddCondition(AnimatorConditionMode.IfNot, 0f, "Grounded");
+            transition.AddCondition(AnimatorConditionMode.Less, -0.3f, "VerticalSpeed");
         }
 
-        if (fallLoop != null && land != null)
+        if (falling != null && landing != null)
         {
-            AnimatorStateTransition transition = fallLoop.AddTransition(land);
+            AnimatorStateTransition transition = falling.AddTransition(landing);
             transition.hasExitTime = false;
             transition.duration = 0.05f;
-            transition.AddCondition(AnimatorConditionMode.If, 0f, "IsGrounded");
+            transition.AddCondition(AnimatorConditionMode.If, 0f, "Grounded");
         }
 
-        if (land != null)
+        if (landing != null)
         {
-            AnimatorStateTransition transition = land.AddTransition(locomotion);
+            AnimatorStateTransition transition = landing.AddTransition(locomotion);
             transition.hasExitTime = true;
-            transition.exitTime = 0.75f;
+            transition.exitTime = 0.7f;
             transition.duration = 0.1f;
         }
 
@@ -196,9 +196,19 @@ public static class MixamoAnimationSetup
         AssetDatabase.Refresh();
 
         AssignControllerToAstronaut(controller);
-        SetupPlayerMoonPhysics();
+        AuditAndFixPlayerSetup();
 
         Debug.Log($"Astronaut animator controller created or updated at {ControllerPath}");
+    }
+
+    [MenuItem("Tools/Regolith/Audit And Fix Player Setup")]
+    public static void AuditAndFixPlayerSetup()
+    {
+        EnsureGroundLayer();
+        SetupPlayerMoonPhysics();
+        AssignControllerToAstronaut(AssetDatabase.LoadAssetAtPath<AnimatorController>(ControllerPath));
+        AuditCameraSetup();
+        Debug.Log("Player setup audit/fix complete. Check Player, GroundCheck, Astronaut Visual Animator, CharacterController, and Main Camera in the Inspector.");
     }
 
     private static Motion CreateLocomotionMotion(AnimatorController controller, AnimationClip idle, AnimationClip walking, AnimationClip running)
@@ -265,6 +275,17 @@ public static class MixamoAnimationSetup
         animator.avatar = FindAstronautAvatar();
         animator.runtimeAnimatorController = controller;
         animator.applyRootMotion = false;
+
+        MonoBehaviour relay = visual.GetComponent("PlayerAnimationEventRelay") as MonoBehaviour;
+        if (relay == null)
+        {
+            Type relayType = FindType("PlayerAnimationEventRelay");
+            if (relayType != null)
+            {
+                relay = visual.AddComponent(relayType) as MonoBehaviour;
+            }
+        }
+
         EditorUtility.SetDirty(visual);
 
         ThirdPersonPlayerController playerController = visual.GetComponentInParent<ThirdPersonPlayerController>();
@@ -274,6 +295,14 @@ public static class MixamoAnimationSetup
             serializedController.FindProperty("animator").objectReferenceValue = animator;
             serializedController.ApplyModifiedProperties();
             EditorUtility.SetDirty(playerController);
+
+            if (relay != null)
+            {
+                SerializedObject serializedRelay = new SerializedObject(relay);
+                serializedRelay.FindProperty("playerController").objectReferenceValue = playerController;
+                serializedRelay.ApplyModifiedProperties();
+                EditorUtility.SetDirty(relay);
+            }
         }
     }
 
@@ -286,31 +315,29 @@ public static class MixamoAnimationSetup
             return;
         }
 
-        CharacterController characterController = player.GetComponent<CharacterController>();
-        if (characterController != null)
-        {
-            UnityEngine.Object.DestroyImmediate(characterController);
-        }
-
         Rigidbody body = player.GetComponent<Rigidbody>();
-        if (body == null)
+        if (body != null)
         {
-            body = player.AddComponent<Rigidbody>();
+            UnityEngine.Object.DestroyImmediate(body);
         }
-
-        body.useGravity = false;
-        body.interpolation = RigidbodyInterpolation.Interpolate;
-        body.constraints = RigidbodyConstraints.FreezeRotation;
 
         CapsuleCollider capsule = player.GetComponent<CapsuleCollider>();
-        if (capsule == null)
+        if (capsule != null)
         {
-            capsule = player.AddComponent<CapsuleCollider>();
+            UnityEngine.Object.DestroyImmediate(capsule);
         }
 
-        capsule.height = 2f;
-        capsule.radius = 0.45f;
-        capsule.center = new Vector3(0f, 1f, 0f);
+        CharacterController characterController = player.GetComponent<CharacterController>();
+        if (characterController == null)
+        {
+            characterController = player.AddComponent<CharacterController>();
+        }
+
+        characterController.height = 2f;
+        characterController.radius = 0.45f;
+        characterController.center = new Vector3(0f, 1f, 0f);
+        characterController.stepOffset = 0.3f;
+        characterController.slopeLimit = 45f;
 
         ThirdPersonPlayerController controller = player.GetComponent<ThirdPersonPlayerController>();
         if (controller != null)
@@ -327,11 +354,112 @@ public static class MixamoAnimationSetup
 
             SerializedObject serializedController = new SerializedObject(controller);
             serializedController.FindProperty("groundCheck").objectReferenceValue = groundCheck;
+            serializedController.FindProperty("groundCheckRadius").floatValue = 0.22f;
+            int groundLayer = LayerMask.NameToLayer("Ground");
+            if (groundLayer >= 0)
+            {
+                serializedController.FindProperty("groundMask").intValue = 1 << groundLayer;
+            }
             serializedController.ApplyModifiedProperties();
             EditorUtility.SetDirty(controller);
         }
 
+        MovePlayerAboveGroundIfNeeded(player, characterController);
+        AssignGroundLayerToLikelyGroundObjects(player);
+
         EditorUtility.SetDirty(player);
+    }
+
+    private static void AuditCameraSetup()
+    {
+        GameObject player = GameObject.Find("Player");
+        Camera camera = Camera.main;
+        if (player == null || camera == null)
+        {
+            return;
+        }
+
+        ThirdPersonCameraFollow follow = camera.GetComponent<ThirdPersonCameraFollow>();
+        if (follow != null)
+        {
+            follow.SetTarget(player.transform);
+        }
+
+        Vector3 desiredPosition = player.transform.position + new Vector3(0f, 2.4f, -5.5f);
+        if (Vector3.Distance(camera.transform.position, player.transform.position) < 1.2f)
+        {
+            camera.transform.position = desiredPosition;
+        }
+
+        camera.transform.LookAt(player.transform.position + Vector3.up * 1.4f);
+        EditorUtility.SetDirty(camera);
+    }
+
+    private static void MovePlayerAboveGroundIfNeeded(GameObject player, CharacterController characterController)
+    {
+        Vector3 capsuleBottom = GetCapsuleBottomWorldPosition(player.transform, characterController);
+        if (Physics.Raycast(player.transform.position + Vector3.up * 2f, Vector3.down, out RaycastHit hit, 10f, 1 << LayerMask.NameToLayer("Ground")))
+        {
+            float desiredBottomY = hit.point.y + 0.02f;
+            float delta = desiredBottomY - capsuleBottom.y;
+            if (Mathf.Abs(delta) > 0.02f)
+            {
+                player.transform.position += Vector3.up * delta;
+            }
+        }
+    }
+
+    private static Vector3 GetCapsuleBottomWorldPosition(Transform player, CharacterController characterController)
+    {
+        float bottomOffset = (characterController.height * 0.5f) - characterController.radius;
+        return player.TransformPoint(characterController.center + Vector3.down * bottomOffset);
+    }
+
+    private static void AssignGroundLayerToLikelyGroundObjects(GameObject player)
+    {
+        int groundLayer = LayerMask.NameToLayer("Ground");
+        if (groundLayer < 0)
+        {
+            return;
+        }
+
+        foreach (Collider collider in UnityEngine.Object.FindObjectsOfType<Collider>())
+        {
+            if (collider.transform.IsChildOf(player.transform))
+            {
+                continue;
+            }
+
+            string lowerName = collider.name.ToLowerInvariant();
+            if (lowerName.Contains("ground") || lowerName.Contains("floor") || lowerName.Contains("platform") || collider is TerrainCollider)
+            {
+                collider.gameObject.layer = groundLayer;
+                EditorUtility.SetDirty(collider.gameObject);
+            }
+        }
+    }
+
+    private static void EnsureGroundLayer()
+    {
+        if (LayerMask.NameToLayer("Ground") >= 0)
+        {
+            return;
+        }
+
+        SerializedObject tagManager = new SerializedObject(AssetDatabase.LoadAllAssetsAtPath("ProjectSettings/TagManager.asset")[0]);
+        SerializedProperty layers = tagManager.FindProperty("layers");
+        for (int i = 8; i < layers.arraySize; i++)
+        {
+            SerializedProperty layer = layers.GetArrayElementAtIndex(i);
+            if (string.IsNullOrEmpty(layer.stringValue))
+            {
+                layer.stringValue = "Ground";
+                tagManager.ApplyModifiedProperties();
+                return;
+            }
+        }
+
+        Debug.LogWarning("No empty user layer slot is available for Ground. Create a Ground layer manually and rerun the audit.");
     }
 
     private static void EnsureFolders()
@@ -342,6 +470,20 @@ public static class MixamoAnimationSetup
         CreateFolderIfMissing("Assets/_Animations");
         CreateFolderIfMissing("Assets/_Animations/Player");
         CreateFolderIfMissing("Assets/_Editor");
+    }
+
+    private static Type FindType(string typeName)
+    {
+        foreach (System.Reflection.Assembly assembly in AppDomain.CurrentDomain.GetAssemblies())
+        {
+            Type type = assembly.GetType(typeName);
+            if (type != null)
+            {
+                return type;
+            }
+        }
+
+        return null;
     }
 
     private static void CreateFolderIfMissing(string path)
@@ -438,6 +580,30 @@ public static class MixamoAnimationSetup
         return null;
     }
 
+    private static AnimationClip FindClipByFileName(params string[] fileNames)
+    {
+        if (!Directory.Exists(MixamoFolder))
+        {
+            return null;
+        }
+
+        string[] fbxPaths = Directory.GetFiles(MixamoFolder, "*.fbx", SearchOption.AllDirectories).Select(ToAssetPath).ToArray();
+        foreach (string fileName in fileNames)
+        {
+            string exactPath = fbxPaths.FirstOrDefault(path => string.Equals(Path.GetFileNameWithoutExtension(path), fileName, StringComparison.OrdinalIgnoreCase));
+            if (!string.IsNullOrEmpty(exactPath))
+            {
+                AnimationClip clip = LoadFirstAnimationClip(exactPath);
+                if (clip != null)
+                {
+                    return clip;
+                }
+            }
+        }
+
+        return FindClip(fileNames);
+    }
+
     private static AnimationClip LoadFirstAnimationClip(string path)
     {
         return LoadAnimationClips(path).FirstOrDefault();
@@ -493,6 +659,22 @@ public static class MixamoAnimationSetup
         }
 
         controller.AddParameter(name, type);
+    }
+
+    private static void EnsureExactParameters(AnimatorController controller)
+    {
+        foreach (AnimatorControllerParameter parameter in controller.parameters.ToArray())
+        {
+            if (parameter.name != "Speed" && parameter.name != "Grounded" && parameter.name != "VerticalSpeed" && parameter.name != "Jump")
+            {
+                controller.RemoveParameter(parameter);
+            }
+        }
+
+        EnsureParameter(controller, "Speed", AnimatorControllerParameterType.Float);
+        EnsureParameter(controller, "Grounded", AnimatorControllerParameterType.Bool);
+        EnsureParameter(controller, "VerticalSpeed", AnimatorControllerParameterType.Float);
+        EnsureParameter(controller, "Jump", AnimatorControllerParameterType.Trigger);
     }
 
     private static void RemoveParameterIfExists(AnimatorController controller, string name)

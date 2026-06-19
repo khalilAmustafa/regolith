@@ -137,15 +137,12 @@ public static class MoonPrototypeSceneBuilder
         Object.DestroyImmediate(visual.GetComponent<CapsuleCollider>());
         SetMaterial(visual, material);
 
-        CapsuleCollider capsule = player.AddComponent<CapsuleCollider>();
-        capsule.height = 2f;
-        capsule.radius = 0.45f;
-        capsule.center = new Vector3(0f, 1f, 0f);
-
-        Rigidbody body = player.AddComponent<Rigidbody>();
-        body.useGravity = false;
-        body.interpolation = RigidbodyInterpolation.Interpolate;
-        body.constraints = RigidbodyConstraints.FreezeRotation;
+        CharacterController controller = player.AddComponent<CharacterController>();
+        controller.height = 2f;
+        controller.radius = 0.45f;
+        controller.center = new Vector3(0f, 1f, 0f);
+        controller.stepOffset = 0.3f;
+        controller.slopeLimit = 45f;
 
         GameObject groundCheck = new GameObject("GroundCheck");
         groundCheck.transform.SetParent(player.transform);
