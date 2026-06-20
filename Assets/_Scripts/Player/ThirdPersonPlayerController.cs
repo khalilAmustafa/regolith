@@ -1,19 +1,42 @@
 using UnityEngine;
 
+// Apollo-inspired, root-motion-driven third-person controller.
+// - Horizontal movement comes ONLY from animation root motion, applied via CharacterController.Move
+//   inside ApplyRootMotion (called by RootMotionRelay on Astronaut Visual). There is no scripted
+//   horizontal velocity, so the two never both move the Player.
+// - Vertical is scripted (lunar gravity + grounded stick) and folded into the same Move call.
+// - Committed actions (hops, turns, stop) lock input/steering and end on Animator normalizedTime.
+// - Turn clips have 0 deg root rotation, so committed turns rotate the Player with scripted rotation.
 [RequireComponent(typeof(CharacterController))]
 public class ThirdPersonPlayerController : MonoBehaviour
 {
-    [Header("Movement")]
-    [SerializeField] private float walkSpeed = 1.5f;
-    [SerializeField] private float sprintSpeed = 2.6f;
-    [SerializeField] private float acceleration = 4f;
-    [SerializeField] private float deceleration = 3.5f;
-    [SerializeField] private float rotationSpeed = 7f;
-    [SerializeField] private float gravity = -3.2f;
-    [SerializeField] private float groundedStickSpeed = -2f;
+    [Header("Locomotion (root-motion driven)")]
+    [SerializeField] private float accelerationRate = 1.5f;   // Speed param units / second
+    [SerializeField] private float decelerationRate = 1.2f;
+    [SerializeField] private float walkRotationSpeed = 5f;    // heavy-but-responsive facing at walk
+    [SerializeField] private float lopeRotationSpeed = 3f;    // heavier facing at lope
 
-    [Header("Lunar Hop (animation-only)")]
-    [SerializeField] private float hopDuration = 0.55f;
+    [Header("Idle committed turns (only when nearly stopped)")]
+    [Range(0f, 120f)] [SerializeField] private float idleTurnMinAngle = 35f;
+    [Range(90f, 180f)] [SerializeField] private float idleTurn180MinAngle = 120f;
+    [SerializeField] private float idleTurnMaxSpeed = 0.15f;
+
+    [Header("Hard stop (committed StopWalk)")]
+    [SerializeField] private float hardStopSpeedThreshold = 0.65f;
+
+    [Header("Gravity / Ground")]
+    [SerializeField] private float gravity = -1.62f;
+    [SerializeField] private float groundedStickSpeed = -0.75f;
+    [SerializeField] private float fallAirborneThreshold = 0.30f;
+
+    [Header("Root Motion")]
+    [SerializeField] private bool useRootMotion = true;
+    [SerializeField] private float forwardJumpRootScale = 0.66f;
+    [SerializeField] private float hopRootScale = 1.0f;
+
+    [Header("Committed Turn Durations (seconds)")]
+    [SerializeField] private float sideTurnDuration = 1.0f;
+    [SerializeField] private float turn180Duration = 1.4f;
 
     [Header("References")]
     [SerializeField] private Animator animator;
@@ -21,90 +44,116 @@ public class ThirdPersonPlayerController : MonoBehaviour
     [SerializeField] private float groundCheckRadius = 0.25f;
     [SerializeField] private LayerMask groundMask;
 
-    [SerializeField] private bool logRuntimeDebug;
-    [SerializeField] private float debugLogInterval = 0.5f;
-
     [Header("Runtime Debug")]
     [SerializeField] private bool debugIsGrounded;
-    [SerializeField] private float debugVerticalSpeed;
-    [SerializeField] private float debugSpeed;
-    [SerializeField] private string debugAnimatorStateName;
-    [SerializeField] private Vector3 debugGroundCheckWorldPosition;
-    [SerializeField] private Vector3 debugCapsuleBottomWorldPosition;
+    [SerializeField] private float debugSpeedParam;
+    [SerializeField] private float debugAirborneTime;
+    [SerializeField] private string debugCommittedAction = "None";
+
+    private enum CommittedAction { None, Hop, ForwardJump, TurnLeft, TurnRight, Turn180, Stop }
+
+    private static readonly int SpeedHash = Animator.StringToHash("Speed");
+    private static readonly int GroundedHash = Animator.StringToHash("Grounded");
+    private static readonly int VerticalSpeedHash = Animator.StringToHash("VerticalSpeed");
+    private static readonly int AirborneTimeHash = Animator.StringToHash("AirborneTime");
+
+    private static readonly int HopTrig = Animator.StringToHash("Hop");
+    private static readonly int ForwardJumpTrig = Animator.StringToHash("ForwardJump");
+    private static readonly int TurnLeftTrig = Animator.StringToHash("TurnLeft");
+    private static readonly int TurnRightTrig = Animator.StringToHash("TurnRight");
+    private static readonly int Turn180Trig = Animator.StringToHash("Turn180");
+    private static readonly int StopTrig = Animator.StringToHash("Stop");
+
+    // Committed-state short-name hashes - must match the Animator state names built in Phase 2.
+    private static readonly int HopState = Animator.StringToHash("JumpHop");
+    private static readonly int ForwardJumpState = Animator.StringToHash("ForwardJump");
+    private static readonly int TurnLeftState = Animator.StringToHash("TurnLeft");
+    private static readonly int TurnRightState = Animator.StringToHash("TurnRight");
+    private static readonly int Turn180State = Animator.StringToHash("Turn180");
+    private static readonly int StopState = Animator.StringToHash("StopWalk");
 
     private CharacterController characterController;
     private Transform cameraTransform;
     private Vector2 moveInput;
-    private Vector3 moveDirection;
-    private Vector3 horizontalVelocity;
+    private Vector3 desiredDirection;
+    private float speedParam;
     private float verticalSpeed;
     private bool isGrounded;
     private float airborneTime;
-    private bool isHopping;
-    private float hopTimer;
-    private float nextDebugLogTime;
+
+    private bool isCommitted;
+    private CommittedAction committedAction = CommittedAction.None;
+    private int committedStateHash;
+    private bool committedStateEntered;
+    private float committedFallbackTimer;
+    private float currentRootScale = 1f;
+
+    private bool isTurning;
+    private Quaternion turnTargetRotation;
+    private float turnDegPerSecond;
+
+    private bool requireInputRelease;
+    private bool prevHasInput;
 
     private void Awake()
     {
         characterController = GetComponent<CharacterController>();
         ApplyDefaultGroundMaskIfNeeded();
         EnsureGroundCheck();
-        UpdateGrounded();
-        SyncDebugFields();
+
+        if (animator != null)
+        {
+            animator.applyRootMotion = useRootMotion;
+        }
 
         if (Camera.main != null)
         {
             cameraTransform = Camera.main.transform;
         }
+
+        UpdateGrounded();
     }
 
     private void Update()
     {
         UpdateGrounded();
         ReadInput();
-        UpdateRotation();
-        HandleJumpInput();
-        ApplyMovement();
-        UpdateAnimator();
-        SyncDebugFields();
-        LogDebugIfNeeded();
+
+        if (isCommitted)
+        {
+            UpdateCommittedAction();
+        }
+        else
+        {
+            UpdateLocomotion();
+        }
+
+        UpdateVertical();
+        UpdateAnimatorParameters();
+        SyncDebug();
+    }
+
+    // Single point where animation-driven horizontal movement reaches the Player. Vertical
+    // (gravity / grounded stick) is folded into the same Move so there is exactly one Move/frame.
+    public void ApplyRootMotion(Vector3 deltaPosition, Quaternion deltaRotation)
+    {
+        if (!useRootMotion || characterController == null)
+        {
+            return;
+        }
+
+        Vector3 motion = new Vector3(deltaPosition.x, 0f, deltaPosition.z) * currentRootScale;
+        motion.y = verticalSpeed * Time.deltaTime;
+        characterController.Move(motion);
+        // deltaRotation is intentionally unused: all locomotion/turn clips measured 0 deg root
+        // rotation, so facing is handled by scripted rotation instead.
     }
 
     private void ReadInput()
     {
         moveInput = new Vector2(Input.GetAxisRaw("Horizontal"), Input.GetAxisRaw("Vertical"));
         moveInput = Vector2.ClampMagnitude(moveInput, 1f);
-        moveDirection = GetCameraRelativeDirection(moveInput);
-    }
-
-    private void HandleJumpInput()
-    {
-        // Animation-only hop: lock out movement for the hop duration so the in-place vertical
-        // clip does not slide. No vertical jump velocity is applied.
-        if (isGrounded && !isHopping && Input.GetButtonDown("Jump"))
-        {
-            isHopping = true;
-            hopTimer = hopDuration;
-            horizontalVelocity = Vector3.zero;
-
-            if (animator != null)
-            {
-                animator.ResetTrigger("Jump");
-                animator.SetTrigger("Jump");
-            }
-        }
-    }
-
-    private void UpdateRotation()
-    {
-        // No steering while the hop plays; camera is a separate script and stays free.
-        if (isHopping || moveDirection.sqrMagnitude <= 0.001f)
-        {
-            return;
-        }
-
-        Quaternion targetRotation = Quaternion.LookRotation(moveDirection, Vector3.up);
-        transform.rotation = Quaternion.Slerp(transform.rotation, targetRotation, rotationSpeed * Time.deltaTime);
+        desiredDirection = GetCameraRelativeDirection(moveInput);
     }
 
     private void UpdateGrounded()
@@ -114,13 +163,6 @@ public class ThirdPersonPlayerController : MonoBehaviour
         if (isGrounded)
         {
             airborneTime = 0f;
-
-            // Small downward stick keeps the CharacterController firmly grounded, including
-            // throughout the in-place hop. Never pushes the player up.
-            if (verticalSpeed < 0f)
-            {
-                verticalSpeed = groundedStickSpeed;
-            }
         }
         else
         {
@@ -128,56 +170,260 @@ public class ThirdPersonPlayerController : MonoBehaviour
         }
     }
 
-    private void ApplyMovement()
+    private void UpdateVertical()
     {
-        if (isHopping)
+        if (isGrounded)
         {
-            hopTimer -= Time.deltaTime;
-            if (hopTimer <= 0f)
-            {
-                isHopping = false;
-            }
-        }
-
-        if (isHopping)
-        {
-            // Movement is locked during the in-place hop: hold horizontal velocity at zero so
-            // the astronaut does not slide while the vertical clip plays.
-            horizontalVelocity = Vector3.zero;
+            verticalSpeed = groundedStickSpeed;
         }
         else
         {
-            // Normal grounded movement: smoothly accelerate/decelerate toward the input.
-            float targetSpeed = Input.GetKey(KeyCode.LeftShift) ? sprintSpeed : walkSpeed;
-            Vector3 desiredVelocity = moveDirection * targetSpeed;
-            float rate = desiredVelocity.sqrMagnitude > horizontalVelocity.sqrMagnitude ? acceleration : deceleration;
-            horizontalVelocity = Vector3.MoveTowards(horizontalVelocity, desiredVelocity, rate * Time.deltaTime);
-        }
-
-        // Gravity applies only while airborne (real falls). Grounded vertical speed is held at
-        // the stick value by UpdateGrounded. No jump velocity is ever applied.
-        if (!isGrounded)
-        {
             verticalSpeed += gravity * Time.deltaTime;
         }
-
-        Vector3 motion = horizontalVelocity;
-        motion.y = verticalSpeed;
-        characterController.Move(motion * Time.deltaTime);
     }
 
-    private void UpdateAnimator()
+    private void UpdateLocomotion()
+    {
+        bool hasInput = moveInput.sqrMagnitude > 0.01f;
+
+        // After a committed Stop, ignore still-held input until it is released.
+        if (requireInputRelease)
+        {
+            if (!hasInput)
+            {
+                requireInputRelease = false;
+            }
+            else
+            {
+                hasInput = false;
+            }
+        }
+
+        bool newlyPressed = hasInput && !prevHasInput;
+        bool released = !hasInput && prevHasInput;
+        prevHasInput = hasInput;
+
+        // Space: forward jump when moving, in-place hop when essentially still.
+        if (isGrounded && Input.GetButtonDown("Jump"))
+        {
+            StartCommitted(hasInput ? CommittedAction.ForwardJump : CommittedAction.Hop);
+            return;
+        }
+
+        // Committed turn animations are POLISH only: allowed exclusively when essentially
+        // stopped and movement is freshly pressed toward a large angle. While moving (or holding
+        // input) we never trigger them - we blend and smoothly rotate instead.
+        if (hasInput && newlyPressed && isGrounded && speedParam < idleTurnMaxSpeed)
+        {
+            float angle = Vector3.SignedAngle(transform.forward, desiredDirection, Vector3.up);
+            float absAngle = Mathf.Abs(angle);
+
+            if (absAngle > idleTurn180MinAngle)
+            {
+                StartCommitted(CommittedAction.Turn180, angle);
+                return;
+            }
+
+            if (absAngle > idleTurnMinAngle)
+            {
+                StartCommitted(angle < 0f ? CommittedAction.TurnLeft : CommittedAction.TurnRight, angle);
+                return;
+            }
+        }
+
+        // Hard stop is polish only: a sudden release from a lope. Normal walking stops just blend
+        // to Idle via Speed smoothing below.
+        if (released && isGrounded && speedParam > hardStopSpeedThreshold)
+        {
+            StartCommitted(CommittedAction.Stop);
+            return;
+        }
+
+        // Default turning: smoothly rotate toward camera-relative movement direction, heavier at
+        // lope than at walk. Stays in Locomotion - never interrupts root-motion movement.
+        if (hasInput)
+        {
+            Quaternion target = Quaternion.LookRotation(desiredDirection, Vector3.up);
+            float rotSpeed = Mathf.Lerp(walkRotationSpeed, lopeRotationSpeed, Mathf.Clamp01(speedParam));
+            transform.rotation = Quaternion.Slerp(transform.rotation, target, rotSpeed * Time.deltaTime);
+        }
+
+        // Drive the root-motion locomotion blend tree: 0 = Idle, 0.45 = Walk, 1.0 = Lope.
+        float targetSpeed = !hasInput ? 0f : (Input.GetKey(KeyCode.LeftShift) ? 1.0f : 0.45f);
+        float rate = targetSpeed > speedParam ? accelerationRate : decelerationRate;
+        speedParam = Mathf.MoveTowards(speedParam, targetSpeed, rate * Time.deltaTime);
+    }
+
+    private void StartCommitted(CommittedAction action, float signedAngle = 0f)
+    {
+        isCommitted = true;
+        committedAction = action;
+        committedFallbackTimer = 0f;
+        committedStateEntered = false;
+        currentRootScale = 1f;
+        isTurning = false;
+
+        switch (action)
+        {
+            case CommittedAction.Hop:
+                currentRootScale = hopRootScale;
+                committedStateHash = HopState;
+                FireTrigger(HopTrig);
+                break;
+
+            case CommittedAction.ForwardJump:
+                currentRootScale = forwardJumpRootScale;
+                committedStateHash = ForwardJumpState;
+                FireTrigger(ForwardJumpTrig);
+                break;
+
+            case CommittedAction.TurnLeft:
+                committedStateHash = TurnLeftState;
+                SetupScriptedTurn(signedAngle, sideTurnDuration);
+                FireTrigger(TurnLeftTrig);
+                break;
+
+            case CommittedAction.TurnRight:
+                committedStateHash = TurnRightState;
+                SetupScriptedTurn(signedAngle, sideTurnDuration);
+                FireTrigger(TurnRightTrig);
+                break;
+
+            case CommittedAction.Turn180:
+                committedStateHash = Turn180State;
+                SetupScriptedTurn(signedAngle, turn180Duration);
+                FireTrigger(Turn180Trig);
+                break;
+
+            case CommittedAction.Stop:
+                committedStateHash = StopState;
+                FireTrigger(StopTrig);
+                break;
+        }
+    }
+
+    // Rotate the Player to face the movement direction captured at the start of the committed
+    // turn, over the given duration. Lands exactly on target (no overshoot / ping-pong); the turn
+    // CLIP chosen by the angle bucket plays as the visual. Turn clips measured 0 deg root rotation,
+    // so the rotation MUST be scripted.
+    private void SetupScriptedTurn(float signedAngle, float duration)
+    {
+        isTurning = true;
+        turnTargetRotation = Quaternion.LookRotation(desiredDirection, Vector3.up);
+        turnDegPerSecond = Mathf.Max(1f, Mathf.Abs(signedAngle)) / Mathf.Max(0.1f, duration);
+    }
+
+    private void UpdateCommittedAction()
+    {
+        // Committed actions ignore all WASD / steering input - only camera (a separate script)
+        // and the scripted turn rotation run.
+        if (isTurning)
+        {
+            transform.rotation = Quaternion.RotateTowards(transform.rotation, turnTargetRotation, turnDegPerSecond * Time.deltaTime);
+        }
+
+        committedFallbackTimer += Time.deltaTime;
+
+        bool ended = false;
+
+        if (animator != null)
+        {
+            // GetCurrentAnimatorStateInfo returns the SOURCE state during a transition, so while
+            // the committed clip plays (and even as it transitions back) the current state stays
+            // the committed state with a climbing normalizedTime. We only end once it has actually
+            // been entered AND reached >= 0.90 (or we have somehow left it afterwards).
+            AnimatorStateInfo current = animator.GetCurrentAnimatorStateInfo(0);
+
+            if (current.shortNameHash == committedStateHash)
+            {
+                committedStateEntered = true;
+                if (current.normalizedTime >= 0.90f)
+                {
+                    ended = true;
+                }
+            }
+            else if (committedStateEntered)
+            {
+                ended = true;
+            }
+        }
+
+        // Documented fallback: if the expected state can't be detected, end after a generous
+        // timeout so committedAction never sticks forever.
+        if (!ended && committedFallbackTimer > 3f)
+        {
+            ended = true;
+        }
+
+        if (ended)
+        {
+            EndCommitted();
+        }
+    }
+
+    private void EndCommitted()
+    {
+        CommittedAction ending = committedAction;
+
+        isCommitted = false;
+        committedAction = CommittedAction.None;
+        isTurning = false;
+        currentRootScale = 1f;
+
+        if (ending == CommittedAction.Stop)
+        {
+            // Stop always ends in idle and does not rebuild speed from still-held input.
+            speedParam = 0f;
+            requireInputRelease = true;
+        }
+        // Turns / hops: speedParam rebuilds from current held input (incl. Shift) next frame
+        // in UpdateLocomotion.
+    }
+
+    private void FireTrigger(int trigger)
     {
         if (animator == null)
         {
             return;
         }
 
-        float normalizedSpeed = sprintSpeed > 0f ? Mathf.Clamp01(horizontalVelocity.magnitude / sprintSpeed) : 0f;
-        animator.SetFloat("Speed", normalizedSpeed, 0.1f, Time.deltaTime);
-        animator.SetBool("Grounded", isGrounded);
-        animator.SetFloat("VerticalSpeed", verticalSpeed);
-        animator.SetFloat("AirborneTime", airborneTime);
+        animator.ResetTrigger(HopTrig);
+        animator.ResetTrigger(ForwardJumpTrig);
+        animator.ResetTrigger(TurnLeftTrig);
+        animator.ResetTrigger(TurnRightTrig);
+        animator.ResetTrigger(Turn180Trig);
+        animator.ResetTrigger(StopTrig);
+        animator.SetTrigger(trigger);
+    }
+
+    private void UpdateAnimatorParameters()
+    {
+        if (animator == null)
+        {
+            return;
+        }
+
+        animator.SetFloat(SpeedHash, speedParam);
+        animator.SetBool(GroundedHash, isGrounded);
+        animator.SetFloat(VerticalSpeedHash, verticalSpeed);
+        animator.SetFloat(AirborneTimeHash, airborneTime);
+    }
+
+    private Vector3 GetCameraRelativeDirection(Vector2 input)
+    {
+        if (cameraTransform == null)
+        {
+            return new Vector3(input.x, 0f, input.y);
+        }
+
+        Vector3 forward = cameraTransform.forward;
+        Vector3 right = cameraTransform.right;
+        forward.y = 0f;
+        right.y = 0f;
+        forward.Normalize();
+        right.Normalize();
+
+        return (forward * input.y + right * input.x).normalized;
     }
 
     private void EnsureGroundCheck()
@@ -212,89 +458,12 @@ public class ThirdPersonPlayerController : MonoBehaviour
         groundMask = groundLayer >= 0 ? 1 << groundLayer : 1 << 0;
     }
 
-    private void SyncDebugFields()
+    private void SyncDebug()
     {
         debugIsGrounded = isGrounded;
-        debugVerticalSpeed = verticalSpeed;
-        debugSpeed = horizontalVelocity.magnitude;
-        debugGroundCheckWorldPosition = groundCheck != null ? groundCheck.position : Vector3.zero;
-        debugCapsuleBottomWorldPosition = GetCapsuleBottomWorldPosition();
-
-        if (animator != null && animator.isActiveAndEnabled)
-        {
-            AnimatorStateInfo stateInfo = animator.GetCurrentAnimatorStateInfo(0);
-            debugAnimatorStateName = ResolveAnimatorStateName(stateInfo);
-        }
-    }
-
-    private string ResolveAnimatorStateName(AnimatorStateInfo stateInfo)
-    {
-        if (stateInfo.IsName("Locomotion"))
-        {
-            return "Locomotion";
-        }
-
-        if (stateInfo.IsName("Lunar_Hop"))
-        {
-            return "Lunar_Hop";
-        }
-
-        if (stateInfo.IsName("Falling"))
-        {
-            return "Falling";
-        }
-
-        if (stateInfo.IsName("Landing"))
-        {
-            return "Landing";
-        }
-
-        return stateInfo.shortNameHash.ToString();
-    }
-
-    private Vector3 GetCapsuleBottomWorldPosition()
-    {
-        if (characterController == null)
-        {
-            characterController = GetComponent<CharacterController>();
-        }
-
-        if (characterController == null)
-        {
-            return transform.position;
-        }
-
-        float bottomOffset = (characterController.height * 0.5f) - characterController.radius;
-        Vector3 localBottom = characterController.center + Vector3.down * bottomOffset;
-        return transform.TransformPoint(localBottom);
-    }
-
-    private void LogDebugIfNeeded()
-    {
-        if (!logRuntimeDebug || Time.time < nextDebugLogTime)
-        {
-            return;
-        }
-
-        nextDebugLogTime = Time.time + debugLogInterval;
-        Debug.Log($"Player grounded={debugIsGrounded}, airborneTime={airborneTime:F2}, verticalSpeed={debugVerticalSpeed:F2}, speed={debugSpeed:F2}, state={debugAnimatorStateName}, groundCheck={debugGroundCheckWorldPosition}, capsuleBottom={debugCapsuleBottomWorldPosition}");
-    }
-
-    private Vector3 GetCameraRelativeDirection(Vector2 input)
-    {
-        if (cameraTransform == null)
-        {
-            return new Vector3(input.x, 0f, input.y);
-        }
-
-        Vector3 forward = cameraTransform.forward;
-        Vector3 right = cameraTransform.right;
-        forward.y = 0f;
-        right.y = 0f;
-        forward.Normalize();
-        right.Normalize();
-
-        return (forward * input.y + right * input.x).normalized;
+        debugSpeedParam = speedParam;
+        debugAirborneTime = airborneTime;
+        debugCommittedAction = isCommitted ? committedAction.ToString() : "None";
     }
 
     private void OnDrawGizmosSelected()
@@ -306,8 +475,5 @@ public class ThirdPersonPlayerController : MonoBehaviour
 
         Gizmos.color = Color.yellow;
         Gizmos.DrawWireSphere(groundCheck.position, groundCheckRadius);
-
-        Gizmos.color = Color.cyan;
-        Gizmos.DrawWireSphere(GetCapsuleBottomWorldPosition(), 0.06f);
     }
 }
