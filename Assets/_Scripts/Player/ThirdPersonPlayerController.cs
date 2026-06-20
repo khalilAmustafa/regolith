@@ -3,23 +3,29 @@ using UnityEngine;
 [RequireComponent(typeof(CharacterController))]
 public class ThirdPersonPlayerController : MonoBehaviour
 {
-    [SerializeField] private float walkSpeed = 4f;
-    [SerializeField] private float sprintSpeed = 7f;
-    [SerializeField] private float jumpHeight = 2.2f;
-    [SerializeField] private float gravity = -4.9f;
-    [SerializeField] private float rotationSpeed = 12f;
+    [Header("Movement")]
+    [SerializeField] private float walkSpeed = 1.5f;
+    [SerializeField] private float sprintSpeed = 2.6f;
+    [SerializeField] private float acceleration = 4f;
+    [SerializeField] private float deceleration = 3.5f;
+    [SerializeField] private float rotationSpeed = 7f;
+    [SerializeField] private float gravity = -3.2f;
+    [SerializeField] private float groundedStickSpeed = -2f;
+
+    [Header("Lunar Hop (animation-only)")]
+    [SerializeField] private float hopDuration = 0.55f;
+
+    [Header("References")]
     [SerializeField] private Animator animator;
     [SerializeField] private Transform groundCheck;
     [SerializeField] private float groundCheckRadius = 0.25f;
     [SerializeField] private LayerMask groundMask;
-    [SerializeField] private float jumpTakeoffDelay = 0.18f;
-    [SerializeField] private bool useJumpTakeoffDelayFallback = true;
+
     [SerializeField] private bool logRuntimeDebug;
     [SerializeField] private float debugLogInterval = 0.5f;
 
     [Header("Runtime Debug")]
     [SerializeField] private bool debugIsGrounded;
-    [SerializeField] private bool debugIsPreparingJump;
     [SerializeField] private float debugVerticalSpeed;
     [SerializeField] private float debugSpeed;
     [SerializeField] private string debugAnimatorStateName;
@@ -30,11 +36,12 @@ public class ThirdPersonPlayerController : MonoBehaviour
     private Transform cameraTransform;
     private Vector2 moveInput;
     private Vector3 moveDirection;
-    private float currentSpeed;
+    private Vector3 horizontalVelocity;
     private float verticalSpeed;
     private bool isGrounded;
-    private bool isPreparingJump;
-    private float jumpPrepareTimer;
+    private float airborneTime;
+    private bool isHopping;
+    private float hopTimer;
     private float nextDebugLogTime;
 
     private void Awake()
@@ -63,32 +70,22 @@ public class ThirdPersonPlayerController : MonoBehaviour
         LogDebugIfNeeded();
     }
 
-    public void OnJumpTakeoff()
-    {
-        if (!isPreparingJump)
-        {
-            return;
-        }
-
-        verticalSpeed = Mathf.Sqrt(jumpHeight * -2f * gravity);
-        isPreparingJump = false;
-        isGrounded = false;
-    }
-
     private void ReadInput()
     {
         moveInput = new Vector2(Input.GetAxisRaw("Horizontal"), Input.GetAxisRaw("Vertical"));
         moveInput = Vector2.ClampMagnitude(moveInput, 1f);
         moveDirection = GetCameraRelativeDirection(moveInput);
-        currentSpeed = Input.GetKey(KeyCode.LeftShift) ? sprintSpeed : walkSpeed;
     }
 
     private void HandleJumpInput()
     {
-        if (isGrounded && !isPreparingJump && Input.GetButtonDown("Jump"))
+        // Animation-only hop: lock out movement for the hop duration so the in-place vertical
+        // clip does not slide. No vertical jump velocity is applied.
+        if (isGrounded && !isHopping && Input.GetButtonDown("Jump"))
         {
-            isPreparingJump = true;
-            jumpPrepareTimer = 0f;
+            isHopping = true;
+            hopTimer = hopDuration;
+            horizontalVelocity = Vector3.zero;
 
             if (animator != null)
             {
@@ -96,22 +93,12 @@ public class ThirdPersonPlayerController : MonoBehaviour
                 animator.SetTrigger("Jump");
             }
         }
-
-        if (!isPreparingJump || !useJumpTakeoffDelayFallback)
-        {
-            return;
-        }
-
-        jumpPrepareTimer += Time.deltaTime;
-        if (jumpPrepareTimer >= jumpTakeoffDelay)
-        {
-            OnJumpTakeoff();
-        }
     }
 
     private void UpdateRotation()
     {
-        if (moveDirection.sqrMagnitude <= 0.001f)
+        // No steering while the hop plays; camera is a separate script and stays free.
+        if (isHopping || moveDirection.sqrMagnitude <= 0.001f)
         {
             return;
         }
@@ -124,24 +111,57 @@ public class ThirdPersonPlayerController : MonoBehaviour
     {
         isGrounded = groundCheck != null && Physics.CheckSphere(groundCheck.position, groundCheckRadius, groundMask, QueryTriggerInteraction.Ignore);
 
-        if (isGrounded && verticalSpeed < 0f)
+        if (isGrounded)
         {
-            verticalSpeed = -1f;
+            airborneTime = 0f;
+
+            // Small downward stick keeps the CharacterController firmly grounded, including
+            // throughout the in-place hop. Never pushes the player up.
+            if (verticalSpeed < 0f)
+            {
+                verticalSpeed = groundedStickSpeed;
+            }
+        }
+        else
+        {
+            airborneTime += Time.deltaTime;
         }
     }
 
     private void ApplyMovement()
     {
-        if (!isPreparingJump)
+        if (isHopping)
+        {
+            hopTimer -= Time.deltaTime;
+            if (hopTimer <= 0f)
+            {
+                isHopping = false;
+            }
+        }
+
+        if (isHopping)
+        {
+            // Movement is locked during the in-place hop: hold horizontal velocity at zero so
+            // the astronaut does not slide while the vertical clip plays.
+            horizontalVelocity = Vector3.zero;
+        }
+        else
+        {
+            // Normal grounded movement: smoothly accelerate/decelerate toward the input.
+            float targetSpeed = Input.GetKey(KeyCode.LeftShift) ? sprintSpeed : walkSpeed;
+            Vector3 desiredVelocity = moveDirection * targetSpeed;
+            float rate = desiredVelocity.sqrMagnitude > horizontalVelocity.sqrMagnitude ? acceleration : deceleration;
+            horizontalVelocity = Vector3.MoveTowards(horizontalVelocity, desiredVelocity, rate * Time.deltaTime);
+        }
+
+        // Gravity applies only while airborne (real falls). Grounded vertical speed is held at
+        // the stick value by UpdateGrounded. No jump velocity is ever applied.
+        if (!isGrounded)
         {
             verticalSpeed += gravity * Time.deltaTime;
         }
-        else if (isGrounded)
-        {
-            verticalSpeed = -1f;
-        }
 
-        Vector3 motion = moveDirection * currentSpeed;
+        Vector3 motion = horizontalVelocity;
         motion.y = verticalSpeed;
         characterController.Move(motion * Time.deltaTime);
     }
@@ -153,10 +173,11 @@ public class ThirdPersonPlayerController : MonoBehaviour
             return;
         }
 
-        float normalizedSpeed = sprintSpeed > 0f ? Mathf.Clamp01(moveInput.magnitude * currentSpeed / sprintSpeed) : 0f;
+        float normalizedSpeed = sprintSpeed > 0f ? Mathf.Clamp01(horizontalVelocity.magnitude / sprintSpeed) : 0f;
         animator.SetFloat("Speed", normalizedSpeed, 0.1f, Time.deltaTime);
         animator.SetBool("Grounded", isGrounded);
         animator.SetFloat("VerticalSpeed", verticalSpeed);
+        animator.SetFloat("AirborneTime", airborneTime);
     }
 
     private void EnsureGroundCheck()
@@ -194,9 +215,8 @@ public class ThirdPersonPlayerController : MonoBehaviour
     private void SyncDebugFields()
     {
         debugIsGrounded = isGrounded;
-        debugIsPreparingJump = isPreparingJump;
         debugVerticalSpeed = verticalSpeed;
-        debugSpeed = sprintSpeed > 0f ? Mathf.Clamp01(moveInput.magnitude * currentSpeed / sprintSpeed) : 0f;
+        debugSpeed = horizontalVelocity.magnitude;
         debugGroundCheckWorldPosition = groundCheck != null ? groundCheck.position : Vector3.zero;
         debugCapsuleBottomWorldPosition = GetCapsuleBottomWorldPosition();
 
@@ -214,9 +234,9 @@ public class ThirdPersonPlayerController : MonoBehaviour
             return "Locomotion";
         }
 
-        if (stateInfo.IsName("JumpStart"))
+        if (stateInfo.IsName("Lunar_Hop"))
         {
-            return "JumpStart";
+            return "Lunar_Hop";
         }
 
         if (stateInfo.IsName("Falling"))
@@ -257,7 +277,7 @@ public class ThirdPersonPlayerController : MonoBehaviour
         }
 
         nextDebugLogTime = Time.time + debugLogInterval;
-        Debug.Log($"Player grounded={debugIsGrounded}, preparingJump={debugIsPreparingJump}, verticalSpeed={debugVerticalSpeed:F2}, speed={debugSpeed:F2}, state={debugAnimatorStateName}, groundCheck={debugGroundCheckWorldPosition}, capsuleBottom={debugCapsuleBottomWorldPosition}");
+        Debug.Log($"Player grounded={debugIsGrounded}, airborneTime={airborneTime:F2}, verticalSpeed={debugVerticalSpeed:F2}, speed={debugSpeed:F2}, state={debugAnimatorStateName}, groundCheck={debugGroundCheckWorldPosition}, capsuleBottom={debugCapsuleBottomWorldPosition}");
     }
 
     private Vector3 GetCameraRelativeDirection(Vector2 input)
