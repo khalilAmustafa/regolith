@@ -1,5 +1,6 @@
 using UnityEngine;
 
+#pragma warning disable 0618
 public class BaseEntrance : MonoBehaviour, IInteractable
 {
     [SerializeField] private int requiredOxygen = 3;
@@ -38,27 +39,31 @@ public class BaseEntrance : MonoBehaviour, IInteractable
         }
     }
 
-    public string GetPrompt()
+    public string GetPrompt(PlayerSurvivalResources player)
     {
         return opened ? "Base entrance open" : $"Press E to open base ({requiredOxygen} oxygen)";
     }
 
-    public void Interact(GameObject player)
+    public bool CanInteract(PlayerSurvivalResources player)
+    {
+        return player != null && !opened && !opening && player.storedOxygen >= requiredOxygen;
+    }
+
+    public void Interact(PlayerSurvivalResources player)
     {
         if (opened || opening)
         {
             return;
         }
 
-        PlayerInventory inventory = player.GetComponent<PlayerInventory>();
-        if (inventory == null || !inventory.SpendOxygen(requiredOxygen))
+        if (player == null || !player.SpendStoredOxygen(requiredOxygen))
         {
             return;
         }
 
         opening = true;
 
-        GameManager gameManager = FindObjectOfType<GameManager>();
+        GameManager gameManager = FindFirstObjectByType<GameManager>();
         if (gameManager != null)
         {
             gameManager.OnBaseOpened();
@@ -75,3 +80,4 @@ public class BaseEntrance : MonoBehaviour, IInteractable
         }
     }
 }
+#pragma warning restore 0618

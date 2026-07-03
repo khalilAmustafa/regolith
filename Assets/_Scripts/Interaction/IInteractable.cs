@@ -1,7 +1,6 @@
-using UnityEngine;
-
 public interface IInteractable
 {
-    string GetPrompt();
-    void Interact(GameObject player);
+    string GetPrompt(PlayerSurvivalResources player);
+    bool CanInteract(PlayerSurvivalResources player);
+    void Interact(PlayerSurvivalResources player);
 }

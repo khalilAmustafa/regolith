@@ -8,12 +8,14 @@ public class ThirdPersonCameraFollow : MonoBehaviour
     [SerializeField] private bool autoFindPlayer = true;
 
     [Header("Framing")]
-    [SerializeField] private float distance = 5.2f;
-    [SerializeField] private float minDistance = 2.2f;
-    [SerializeField] private float maxDistance = 8.5f;
-    [SerializeField] private float height = 1.8f;
+    [SerializeField] private float distance = 8f;
+    [SerializeField] private float minDistance = 4.5f;
+    [SerializeField] private float maxDistance = 12f;
+    [SerializeField] private float height = 2.2f;
     [SerializeField] private float lookAtHeight = 1.35f;
     [SerializeField] private float shoulderOffset = 0.35f;
+    [SerializeField] private bool enforceComfortDistanceOnStart = true;
+    [SerializeField] private float comfortStartDistance = 8f;
 
     [Header("Mouse Look")]
     [SerializeField] private float mouseSensitivity = 2.4f;
@@ -64,6 +66,16 @@ public class ThirdPersonCameraFollow : MonoBehaviour
         Vector3 angles = transform.eulerAngles;
         yaw = angles.y;
         pitch = NormalizeAngle(angles.x);
+
+        minDistance = Mathf.Max(0.5f, minDistance);
+        maxDistance = Mathf.Max(minDistance, maxDistance);
+
+        if (enforceComfortDistanceOnStart && distance < comfortStartDistance)
+        {
+            distance = comfortStartDistance;
+        }
+
+        distance = Mathf.Clamp(distance, minDistance, maxDistance);
 
         if (lockCursorOnStart)
         {
