@@ -1,5 +1,6 @@
 using UnityEngine;
 
+#pragma warning disable 0618
 public enum ObjectiveState
 {
     CollectRegolith,
@@ -21,7 +22,7 @@ public class GameManager : MonoBehaviour
     {
         if (hud == null)
         {
-            hud = FindObjectOfType<SimpleHUD>();
+            hud = FindFirstObjectByType<SimpleHUD>();
         }
     }
 
@@ -32,7 +33,7 @@ public class GameManager : MonoBehaviour
 
     public void OnRegolithPickedUp()
     {
-        PlayerInventory inventory = FindObjectOfType<PlayerInventory>();
+        PlayerInventory inventory = FindFirstObjectByType<PlayerInventory>();
         if (currentState == ObjectiveState.CollectRegolith && inventory != null && inventory.Regolith >= regolithNeededForProcessing)
         {
             SetObjective(ObjectiveState.ProcessOxygen);
@@ -94,3 +95,4 @@ public class GameManager : MonoBehaviour
         }
     }
 }
+#pragma warning restore 0618

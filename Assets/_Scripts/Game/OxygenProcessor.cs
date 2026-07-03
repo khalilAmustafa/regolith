@@ -1,5 +1,6 @@
 using UnityEngine;
 
+#pragma warning disable 0618
 public class OxygenProcessor : MonoBehaviour, IInteractable
 {
     [SerializeField] private int requiredRegolith = 5;
@@ -14,7 +15,7 @@ public class OxygenProcessor : MonoBehaviour, IInteractable
         cachedRenderer = GetComponentInChildren<Renderer>();
     }
 
-    public string GetPrompt()
+    public string GetPrompt(PlayerSurvivalResources player)
     {
         if (activated && !reusable)
         {
@@ -24,24 +25,28 @@ public class OxygenProcessor : MonoBehaviour, IInteractable
         return $"Press E to process {requiredRegolith} regolith";
     }
 
-    public void Interact(GameObject player)
+    public bool CanInteract(PlayerSurvivalResources player)
+    {
+        return player != null && (reusable || !activated) && player.regolithAmount >= requiredRegolith;
+    }
+
+    public void Interact(PlayerSurvivalResources player)
     {
         if (activated && !reusable)
         {
             return;
         }
 
-        PlayerInventory inventory = player.GetComponent<PlayerInventory>();
-        if (inventory == null || !inventory.SpendRegolith(requiredRegolith))
+        if (player == null || !player.SpendRegolith(requiredRegolith))
         {
             return;
         }
 
-        inventory.AddOxygen(oxygenOutput);
+        player.AddStoredOxygen(oxygenOutput);
         activated = true;
         SetActivatedVisual();
 
-        GameManager gameManager = FindObjectOfType<GameManager>();
+        GameManager gameManager = FindFirstObjectByType<GameManager>();
         if (gameManager != null)
         {
             gameManager.OnOxygenProcessed();
@@ -66,3 +71,4 @@ public class OxygenProcessor : MonoBehaviour, IInteractable
         }
     }
 }
+#pragma warning restore 0618

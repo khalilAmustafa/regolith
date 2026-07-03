@@ -1,5 +1,6 @@
 using UnityEngine;
 
+#pragma warning disable 0618
 public class RegolithPickup : MonoBehaviour, IInteractable
 {
     [SerializeField] private int amount = 1;
@@ -11,22 +12,36 @@ public class RegolithPickup : MonoBehaviour, IInteractable
         transform.Rotate(Vector3.up, rotationSpeed * Time.deltaTime, Space.World);
     }
 
-    public string GetPrompt()
+    public string GetPrompt(PlayerSurvivalResources player)
     {
         return $"Press E to collect {amount} regolith";
     }
 
-    public void Interact(GameObject player)
+    public bool CanInteract(PlayerSurvivalResources player)
     {
-        PlayerInventory inventory = player.GetComponent<PlayerInventory>();
-        if (inventory == null)
+        return player != null && player.regolithAmount < player.maxRegolithAmount;
+    }
+
+    public void Interact(PlayerSurvivalResources player)
+    {
+        if (player == null)
         {
             return;
         }
 
-        inventory.AddRegolith(amount);
+        if (player.regolithAmount >= player.maxRegolithAmount)
+        {
+            if (SurvivalHUD.Instance != null)
+            {
+                SurvivalHUD.Instance.ShowMessage("Regolith storage full");
+            }
 
-        GameManager gameManager = FindObjectOfType<GameManager>();
+            return;
+        }
+
+        player.AddRegolith(amount);
+
+        GameManager gameManager = FindFirstObjectByType<GameManager>();
         if (gameManager != null)
         {
             gameManager.OnRegolithPickedUp();
@@ -42,3 +57,4 @@ public class RegolithPickup : MonoBehaviour, IInteractable
         }
     }
 }
+#pragma warning restore 0618

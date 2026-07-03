@@ -1,5 +1,6 @@
 using UnityEngine;
 
+#pragma warning disable 0618
 public class PlayerInventory : MonoBehaviour
 {
     public int Regolith { get; private set; }
@@ -9,7 +10,7 @@ public class PlayerInventory : MonoBehaviour
 
     private void Awake()
     {
-        hud = FindObjectOfType<SimpleHUD>();
+        hud = FindFirstObjectByType<SimpleHUD>();
         UpdateHud();
     }
 
@@ -68,7 +69,7 @@ public class PlayerInventory : MonoBehaviour
     {
         if (hud == null)
         {
-            hud = FindObjectOfType<SimpleHUD>();
+            hud = FindFirstObjectByType<SimpleHUD>();
         }
 
         if (hud != null)
@@ -77,3 +78,4 @@ public class PlayerInventory : MonoBehaviour
         }
     }
 }
+#pragma warning restore 0618

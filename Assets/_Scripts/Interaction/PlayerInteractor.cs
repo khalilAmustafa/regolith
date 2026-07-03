@@ -1,6 +1,7 @@
 using UnityEngine;
 using UnityEngine.UI;
 
+#pragma warning disable 0618
 public class PlayerInteractor : MonoBehaviour
 {
     [SerializeField] private Transform cameraTransform;
@@ -9,6 +10,7 @@ public class PlayerInteractor : MonoBehaviour
 
     private SimpleHUD hud;
     private IInteractable currentInteractable;
+    private PlayerSurvivalResources playerResources;
 
     private void Awake()
     {
@@ -17,7 +19,8 @@ public class PlayerInteractor : MonoBehaviour
             cameraTransform = Camera.main.transform;
         }
 
-        hud = FindObjectOfType<SimpleHUD>();
+        hud = FindFirstObjectByType<SimpleHUD>();
+        playerResources = GetComponent<PlayerSurvivalResources>();
     }
 
     private void Update()
@@ -26,7 +29,7 @@ public class PlayerInteractor : MonoBehaviour
 
         if (currentInteractable != null && Input.GetKeyDown(KeyCode.E))
         {
-            currentInteractable.Interact(gameObject);
+            currentInteractable.Interact(playerResources);
         }
     }
 
@@ -43,7 +46,7 @@ public class PlayerInteractor : MonoBehaviour
             currentInteractable = hit.collider.GetComponentInParent<IInteractable>();
         }
 
-        string prompt = currentInteractable != null ? currentInteractable.GetPrompt() : string.Empty;
+        string prompt = currentInteractable != null ? currentInteractable.GetPrompt(playerResources) : string.Empty;
         SetPrompt(prompt);
     }
 
@@ -70,3 +73,4 @@ public class PlayerInteractor : MonoBehaviour
         promptText = newPromptText;
     }
 }
+#pragma warning restore 0618
