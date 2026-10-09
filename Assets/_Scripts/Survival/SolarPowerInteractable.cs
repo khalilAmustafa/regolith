@@ -52,7 +52,7 @@ public class SolarPowerInteractable : MonoBehaviour, IInteractable
             return cleaningMinigame.IsCleaning ? string.Empty : "Press E\nUse cleaning tool";
         }
 
-        return isActivated ? "Solar power online" : "Press E to restore solar power";
+        return isActivated ? "Solar power online" : "Use generator to restore power";
     }
 
     public bool CanInteract(PlayerSurvivalResources player)
@@ -67,7 +67,7 @@ public class SolarPowerInteractable : MonoBehaviour, IInteractable
             return player != null;
         }
 
-        return player != null && !isActivated;
+        return false;
     }
 
     public void Interact(PlayerSurvivalResources player)
@@ -88,20 +88,7 @@ public class SolarPowerInteractable : MonoBehaviour, IInteractable
             return;
         }
 
-        if (isActivated)
-        {
-            return;
-        }
-
-        player.SetPowerOnline(true);
-        if (powerState != null)
-        {
-            powerState.SetOnline();
-        }
-
-        isActivated = true;
-        SetOnlineVisuals();
-        ShowMessage("Solar power restored");
+        ShowMessage("Use the solar generator to restore power");
     }
 
     private void HandlePowerOnline()

@@ -4,6 +4,7 @@ public class HabitatDamageVisualState : MonoBehaviour
 {
     public GameObject crackObject;
     public GameObject concretePatchObject;
+    public AudioSource impactAudio;
 
     public void ShowNormal()
     {

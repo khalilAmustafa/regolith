@@ -17,6 +17,7 @@ public static class HabitatDamageDecalSetupUtility
     private const string PatchMaterialPath = MaterialFolder + "/Regolith_Concrete_Patch_Mat.mat";
     private const string CrackObjectName = "Crack_Impact_01";
     private const string PatchObjectName = "ConcretePatch_01";
+    private const string ImpactAudioClipPath = "Assets/_Audio/Explosion_MuffledBoom.wav";
 
     [MenuItem(MenuPath)]
     public static void SetupHabitatCrackDamageDecal()
@@ -51,6 +52,7 @@ public static class HabitatDamageDecalSetupUtility
 
         GameObject crack = CreateOrUpdateCrackQuad(habitat, crackMaterial);
         GameObject patch = CreateOrUpdateConcretePatch(habitat, patchMaterial, crack);
+        AudioSource impactAudio = CreateOrUpdateImpactAudio(crack);
         HabitatDamageVisualState visualState = habitat.GetComponent<HabitatDamageVisualState>();
         if (visualState == null)
         {
@@ -63,6 +65,7 @@ public static class HabitatDamageDecalSetupUtility
 
         visualState.crackObject = crack;
         visualState.concretePatchObject = patch;
+        visualState.impactAudio = impactAudio;
         visualState.ShowDamaged();
 
         EditorUtility.SetDirty(visualState);
@@ -75,6 +78,7 @@ public static class HabitatDamageDecalSetupUtility
             "- Crack texture path: " + CrackTexturePath + "\n" +
             "- Material created: " + (crackMaterial != null ? "yes" : "no") + "\n" +
             "- Crack quad placed: " + (crack != null ? "yes" : "no") + "\n" +
+            "- Impact audio assigned: " + (impactAudio != null && impactAudio.clip != null ? "yes" : "no") + "\n" +
             "- Patch object created: " + (patch != null ? "yes" : "no") + "\n" +
             "- Visual state script added: " + (visualState != null ? "yes" : "no"));
     }
@@ -315,6 +319,37 @@ public static class HabitatDamageDecalSetupUtility
         EditorUtility.SetDirty(quad);
         Debug.Log("Crack quad placed: " + CrackObjectName);
         return quad;
+    }
+
+    private static AudioSource CreateOrUpdateImpactAudio(GameObject impactObject)
+    {
+        if (impactObject == null)
+        {
+            return null;
+        }
+
+        AudioSource audio = impactObject.GetComponent<AudioSource>();
+        if (audio == null)
+        {
+            audio = Undo.AddComponent<AudioSource>(impactObject);
+        }
+        else
+        {
+            Undo.RecordObject(audio, "Configure crack impact audio");
+        }
+
+        audio.clip = AssetDatabase.LoadAssetAtPath<AudioClip>(ImpactAudioClipPath);
+        audio.playOnAwake = false;
+        audio.spatialBlend = 1f;
+        audio.volume = 0.75f;
+        EditorUtility.SetDirty(audio);
+
+        if (audio.clip == null)
+        {
+            Debug.LogWarning("Impact audio clip was not found at " + ImpactAudioClipPath + ".");
+        }
+
+        return audio;
     }
 
     private static GameObject CreateOrUpdateConcretePatch(GameObject habitat, Material material, GameObject crack)

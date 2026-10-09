@@ -5,6 +5,7 @@ public class SimpleHUD : MonoBehaviour
 {
     [SerializeField] private Text regolithText;
     [SerializeField] private Text oxygenText;
+    [SerializeField] private Text concreteText;
     [SerializeField] private Text promptText;
     [SerializeField] private Text objectiveText;
     [SerializeField] private Text winText;
@@ -22,6 +23,11 @@ public class SimpleHUD : MonoBehaviour
 
     public void SetInventory(int regolith, int oxygen)
     {
+        SetInventory(regolith, oxygen, 0);
+    }
+
+    public void SetInventory(int regolith, int oxygen, int concrete)
+    {
         if (regolithText != null)
         {
             regolithText.text = $"Regolith: {regolith}";
@@ -30,6 +36,11 @@ public class SimpleHUD : MonoBehaviour
         if (oxygenText != null)
         {
             oxygenText.text = $"Oxygen: {oxygen}";
+        }
+
+        if (concreteText != null)
+        {
+            concreteText.text = $"Concrete: {concrete}";
         }
     }
 
@@ -63,6 +74,16 @@ public class SimpleHUD : MonoBehaviour
     {
         regolithText = regolith;
         oxygenText = oxygen;
+        promptText = prompt;
+        objectiveText = objective;
+        winText = win;
+    }
+
+    public void Bind(Text regolith, Text oxygen, Text concrete, Text prompt, Text objective, Text win)
+    {
+        regolithText = regolith;
+        oxygenText = oxygen;
+        concreteText = concrete;
         promptText = prompt;
         objectiveText = objective;
         winText = win;

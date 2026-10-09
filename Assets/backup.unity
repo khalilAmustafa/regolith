@@ -1187,7 +1187,9 @@ MonoBehaviour:
   cleaningCamera: {fileID: 458779126}
   playerControllerToDisable: {fileID: 1425041210}
   cameraControllerToDisable: {fileID: 1084096259}
+  rootMotionRelayToDisable: {fileID: 0}
   playerRigidbody: {fileID: 0}
+  playerCharacterController: {fileID: 0}
   playerAnimator: {fileID: 2012166679}
   dirtOverlayRenderer: {fileID: 149187315}
   cleaningPanelCollider: {fileID: 1656786761}
@@ -1209,6 +1211,7 @@ MonoBehaviour:
   useCameraFollower: 1
   use3DToolCleaner: 1
   freezeRigidbodyDuringCleaning: 1
+  disableCharacterControllerDuringCleaning: 1
   disableAnimatorRootMotionDuringCleaning: 1
   maskResolution: 1024
   brushRadiusUV: 0.055
@@ -1219,6 +1222,11 @@ MonoBehaviour:
   cleanerToolLocalPositionOffset: {x: 0, y: 0, z: 0}
   cleanerToolLocalEulerOffset: {x: 0, y: 0, z: 0}
   cleanerToolVisibleScale: {x: 12, y: 12, z: 12}
+  cleanerToolFollowSmoothTime: 0.12
+  cleanerToolMotionTilt: 6
+  cleanerToolRotationSmoothTime: 0.08
+  cleanerToolFaceMovementDirection: 1
+  cleanerToolInvertMovementDirection: 1
   fallbackPanelSize: {x: 8.838402, y: 1.7668159}
 --- !u!114 &597668872
 MonoBehaviour:
@@ -1311,6 +1319,7 @@ MonoBehaviour:
   orthographicSize: 1.05
   useOrthographicCamera: 1
   followSmoothTime: 0.07
+  verticalFollowSmoothMultiplier: 2.4
   mouseInfluence: 1
   borderPadding: 0.02
   invertNormal: 0
@@ -2457,6 +2466,8 @@ MonoBehaviour:
   height: 1.9
   lookAtHeight: 1.3
   shoulderOffset: 0.35
+  enforceComfortDistanceOnStart: 1
+  comfortStartDistance: 8
   mouseSensitivity: 2.4
   invertY: 0
   minPitch: -25
@@ -3365,13 +3376,21 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 310eded0a5e5ef14b8598cd9ae662e5f, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::PlayerSurvivalResources
+  suitO2: 100
+  maxSuitO2: 100
   maxSuitOxygen: 100
   currentSuitOxygen: 100
   suitOxygenDrainPerSecond: 0.18
-  regolithAmount: 0
-  maxRegolithAmount: 10
+  storedO2: 100
+  maxStoredO2: 100
   storedOxygen: 100
   maxStoredOxygen: 100
+  regolith: 0
+  maxRegolith: 10
+  regolithAmount: 0
+  maxRegolithAmount: 10
+  concrete: 0
+  maxConcrete: 20
   powerOnline: 0
   isDead: 0
 --- !u!114 &1425041218
@@ -6624,6 +6643,7 @@ MonoBehaviour:
   oxygenText: {fileID: 1214456727}
   storedOxygenText: {fileID: 1680055205}
   regolithText: {fileID: 976071345}
+  concreteText: {fileID: 0}
   powerText: {fileID: 860170435}
   promptText: {fileID: 1420761211}
   messageText: {fileID: 1915068080}
@@ -7813,89 +7833,6 @@ GameObject:
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0
   m_IsActive: 1
---- !u!1001 &5414501741311080793
-PrefabInstance:
-  m_ObjectHideFlags: 0
-  serializedVersion: 2
-  m_Modification:
-    serializedVersion: 3
-    m_TransformParent: {fileID: 0}
-    m_Modifications:
-    - target: {fileID: 2214605411923361732, guid: cd667351422cda74ba6c565a3ef9048a,
-        type: 3}
-      propertyPath: m_Name
-      value: Cleaning_Tool_01
-      objectReference: {fileID: 0}
-    - target: {fileID: 8332805706715092291, guid: cd667351422cda74ba6c565a3ef9048a,
-        type: 3}
-      propertyPath: m_LocalScale.x
-      value: 20
-      objectReference: {fileID: 0}
-    - target: {fileID: 8332805706715092291, guid: cd667351422cda74ba6c565a3ef9048a,
-        type: 3}
-      propertyPath: m_LocalScale.y
-      value: 20
-      objectReference: {fileID: 0}
-    - target: {fileID: 8332805706715092291, guid: cd667351422cda74ba6c565a3ef9048a,
-        type: 3}
-      propertyPath: m_LocalScale.z
-      value: 20
-      objectReference: {fileID: 0}
-    - target: {fileID: 8332805706715092291, guid: cd667351422cda74ba6c565a3ef9048a,
-        type: 3}
-      propertyPath: m_LocalPosition.x
-      value: 17.980482
-      objectReference: {fileID: 0}
-    - target: {fileID: 8332805706715092291, guid: cd667351422cda74ba6c565a3ef9048a,
-        type: 3}
-      propertyPath: m_LocalPosition.y
-      value: 7.1
-      objectReference: {fileID: 0}
-    - target: {fileID: 8332805706715092291, guid: cd667351422cda74ba6c565a3ef9048a,
-        type: 3}
-      propertyPath: m_LocalPosition.z
-      value: 12.133781
-      objectReference: {fileID: 0}
-    - target: {fileID: 8332805706715092291, guid: cd667351422cda74ba6c565a3ef9048a,
-        type: 3}
-      propertyPath: m_LocalRotation.w
-      value: 0.24321268
-      objectReference: {fileID: 0}
-    - target: {fileID: 8332805706715092291, guid: cd667351422cda74ba6c565a3ef9048a,
-        type: 3}
-      propertyPath: m_LocalRotation.x
-      value: -0.24321268
-      objectReference: {fileID: 0}
-    - target: {fileID: 8332805706715092291, guid: cd667351422cda74ba6c565a3ef9048a,
-        type: 3}
-      propertyPath: m_LocalRotation.y
-      value: 0.66396356
-      objectReference: {fileID: 0}
-    - target: {fileID: 8332805706715092291, guid: cd667351422cda74ba6c565a3ef9048a,
-        type: 3}
-      propertyPath: m_LocalRotation.z
-      value: 0.66396356
-      objectReference: {fileID: 0}
-    - target: {fileID: 8332805706715092291, guid: cd667351422cda74ba6c565a3ef9048a,
-        type: 3}
-      propertyPath: m_LocalEulerAnglesHint.x
-      value: -90
-      objectReference: {fileID: 0}
-    - target: {fileID: 8332805706715092291, guid: cd667351422cda74ba6c565a3ef9048a,
-        type: 3}
-      propertyPath: m_LocalEulerAnglesHint.y
-      value: 139.764
-      objectReference: {fileID: 0}
-    - target: {fileID: 8332805706715092291, guid: cd667351422cda74ba6c565a3ef9048a,
-        type: 3}
-      propertyPath: m_LocalEulerAnglesHint.z
-      value: 0
-      objectReference: {fileID: 0}
-    m_RemovedComponents: []
-    m_RemovedGameObjects: []
-    m_AddedGameObjects: []
-    m_AddedComponents: []
-  m_SourcePrefab: {fileID: 100100000, guid: cd667351422cda74ba6c565a3ef9048a, type: 3}
 --- !u!1 &5552418007141294254
 GameObject:
   m_ObjectHideFlags: 0
@@ -8190,6 +8127,74 @@ GameObject:
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0
   m_IsActive: 1
+--- !u!1001 &8813050907964467721
+PrefabInstance:
+  m_ObjectHideFlags: 0
+  serializedVersion: 2
+  m_Modification:
+    serializedVersion: 3
+    m_TransformParent: {fileID: 0}
+    m_Modifications:
+    - target: {fileID: 2214605411923361732, guid: cd667351422cda74ba6c565a3ef9048a,
+        type: 3}
+      propertyPath: m_Name
+      value: Cleaning_Tool_01
+      objectReference: {fileID: 0}
+    - target: {fileID: 8332805706715092291, guid: cd667351422cda74ba6c565a3ef9048a,
+        type: 3}
+      propertyPath: m_LocalPosition.x
+      value: 14.32504
+      objectReference: {fileID: 0}
+    - target: {fileID: 8332805706715092291, guid: cd667351422cda74ba6c565a3ef9048a,
+        type: 3}
+      propertyPath: m_LocalPosition.y
+      value: 6.218964
+      objectReference: {fileID: 0}
+    - target: {fileID: 8332805706715092291, guid: cd667351422cda74ba6c565a3ef9048a,
+        type: 3}
+      propertyPath: m_LocalPosition.z
+      value: 15.14381
+      objectReference: {fileID: 0}
+    - target: {fileID: 8332805706715092291, guid: cd667351422cda74ba6c565a3ef9048a,
+        type: 3}
+      propertyPath: m_LocalRotation.w
+      value: 0.34395763
+      objectReference: {fileID: 0}
+    - target: {fileID: 8332805706715092291, guid: cd667351422cda74ba6c565a3ef9048a,
+        type: 3}
+      propertyPath: m_LocalRotation.x
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 8332805706715092291, guid: cd667351422cda74ba6c565a3ef9048a,
+        type: 3}
+      propertyPath: m_LocalRotation.y
+      value: 0.9389852
+      objectReference: {fileID: 0}
+    - target: {fileID: 8332805706715092291, guid: cd667351422cda74ba6c565a3ef9048a,
+        type: 3}
+      propertyPath: m_LocalRotation.z
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 8332805706715092291, guid: cd667351422cda74ba6c565a3ef9048a,
+        type: 3}
+      propertyPath: m_LocalEulerAnglesHint.x
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 8332805706715092291, guid: cd667351422cda74ba6c565a3ef9048a,
+        type: 3}
+      propertyPath: m_LocalEulerAnglesHint.y
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 8332805706715092291, guid: cd667351422cda74ba6c565a3ef9048a,
+        type: 3}
+      propertyPath: m_LocalEulerAnglesHint.z
+      value: 0
+      objectReference: {fileID: 0}
+    m_RemovedComponents: []
+    m_RemovedGameObjects: []
+    m_AddedGameObjects: []
+    m_AddedComponents: []
+  m_SourcePrefab: {fileID: 100100000, guid: cd667351422cda74ba6c565a3ef9048a, type: 3}
 --- !u!4 &9041487755605191077
 Transform:
   m_ObjectHideFlags: 0
@@ -8249,4 +8254,4 @@ SceneRoots:
   - {fileID: 4699274644561650495}
   - {fileID: 9100000011}
   - {fileID: 4746475954133078401}
-  - {fileID: 5414501741311080793}
+  - {fileID: 8813050907964467721}

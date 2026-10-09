@@ -5,7 +5,7 @@ using UnityEngine.UI;
 public class PlayerInteractor : MonoBehaviour
 {
     [SerializeField] private Transform cameraTransform;
-    [SerializeField] private float interactDistance = 3f;
+    [SerializeField] private float interactDistance = 2f;
     [SerializeField] private Text promptText;
 
     private SimpleHUD hud;

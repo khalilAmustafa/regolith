@@ -64,8 +64,11 @@ public static class RegolithGatherAnimationSetupUtility
             Debug.LogWarning("Regolith gathering animation setup: Player Animator does not use a directly editable AnimatorController. Add Gather/Gathering Objects manually or assign an AnimatorController.");
         }
 
+        GameObject playerObject = GameObject.FindGameObjectWithTag("Player");
+        RegolithCollector collector = WireCollector(playerObject, playerAnimator, gatherClip);
         RegolithCollectionManager manager = FindOrCreateManager();
         WireManager(manager, playerAnimator, gatherClip);
+        DisableLegacyManagerIfNewCollectorIsActive(manager, collector);
 
         EditorSceneManager.MarkSceneDirty(SceneManager.GetActiveScene());
         AssetDatabase.SaveAssets();
@@ -78,7 +81,9 @@ public static class RegolithGatherAnimationSetupUtility
             "- Humanoid compatible: " + (humanoidUsable ? "yes" : "no") + "\n" +
             "- Player Animator found: " + (playerAnimator != null ? "yes" : "no") + "\n" +
             "- AnimatorController wired: " + (controllerWired ? "yes" : "no") + "\n" +
+            "- RegolithCollector wired: " + (collector != null ? "yes" : "no") + "\n" +
             "- RegolithCollectionManager wired: " + (manager != null ? "yes" : "no") + "\n" +
+            "- Legacy manager disabled for new collector: " + (manager != null && collector != null && !manager.enabled ? "yes" : "no") + "\n" +
             "- Root transform baked into pose: yes\n" +
             "- Imported gather animation playback: enabled");
     }
@@ -370,6 +375,60 @@ public static class RegolithGatherAnimationSetupUtility
         manager.fallbackGatherDuration = SafeFallbackGatherDuration;
         manager.gatherAnimationController = EnsureGatherController(manager.player, playerAnimator, manager.fallbackGatherDuration);
 
+        EditorUtility.SetDirty(manager);
+    }
+
+    private static RegolithCollector WireCollector(GameObject playerObject, Animator playerAnimator, AnimationClip gatherClip)
+    {
+        if (playerObject == null)
+        {
+            Debug.LogWarning("Regolith gathering animation setup: no Player object found. RegolithCollector animation wiring was skipped.");
+            return null;
+        }
+
+        PlayerInventory inventory = playerObject.GetComponent<PlayerInventory>();
+        if (inventory == null)
+        {
+            inventory = Undo.AddComponent<PlayerInventory>(playerObject);
+        }
+
+        RegolithCollector collector = playerObject.GetComponent<RegolithCollector>();
+        if (collector == null)
+        {
+            collector = Undo.AddComponent<RegolithCollector>(playerObject);
+        }
+        else
+        {
+            Undo.RecordObject(collector, "Wire regolith collector gathering animation");
+        }
+
+        int regolithLayer = LayerMask.NameToLayer("Regolith");
+        LayerMask layerMask = regolithLayer >= 0 ? 1 << regolithLayer : ~0;
+        collector.Configure(3f, KeyCode.E, layerMask);
+        collector.ConfigureGatherAnimation(
+            EnsureGatherController(playerObject.transform, playerAnimator, SafeFallbackGatherDuration),
+            playerAnimator,
+            GatherTrigger,
+            GatherStateName,
+            SafeFallbackGatherDuration,
+            gatherClip != null,
+            true);
+
+        EditorUtility.SetDirty(inventory);
+        EditorUtility.SetDirty(collector);
+        EditorUtility.SetDirty(playerObject);
+        return collector;
+    }
+
+    private static void DisableLegacyManagerIfNewCollectorIsActive(RegolithCollectionManager manager, RegolithCollector collector)
+    {
+        if (manager == null || collector == null || !manager.enabled)
+        {
+            return;
+        }
+
+        Undo.RecordObject(manager, "Disable legacy regolith manager");
+        manager.enabled = false;
         EditorUtility.SetDirty(manager);
     }
 

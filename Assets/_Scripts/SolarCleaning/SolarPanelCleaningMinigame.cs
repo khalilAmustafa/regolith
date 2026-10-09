@@ -110,17 +110,17 @@ public class SolarPanelCleaningMinigame : MonoBehaviour
             return;
         }
 
+        if (cameraFollower != null && useCameraFollower)
+        {
+            cameraFollower.TickFollow(Input.mousePosition);
+        }
+
+        UpdateCleanerVisual();
+
         bool canPaint = forceClickToClean ? Input.GetMouseButton(0) : (!requireMouseButton || Input.GetMouseButton(0));
         if (canPaint)
         {
             TryCleanUnderMouse();
-
-            if (cameraFollower != null && useCameraFollower)
-            {
-                cameraFollower.TickFollow(Input.mousePosition);
-            }
-
-            UpdateCleanerVisual();
         }
         else
         {
@@ -360,21 +360,21 @@ public class SolarPanelCleaningMinigame : MonoBehaviour
         }
 
         Ray ray = cleaningCamera.ScreenPointToRay(mousePosition);
-        if (cleaningPanelCollider != null && cleaningPanelCollider.Raycast(ray, out RaycastHit hit, 250f))
-        {
-            if (TryGetOverlayUv(hit.point, out uv))
-            {
-                worldPoint = hit.point;
-                normal = GetOverlayTransform() != null ? GetOverlayTransform().forward : hit.normal;
-                return true;
-            }
-        }
-
         if (TryRaycastManualOverlayPlane(ray, out uv, out worldPoint))
         {
             Transform overlay = GetOverlayTransform();
             normal = overlay != null ? overlay.forward : Vector3.forward;
             return true;
+        }
+
+        if (cleaningPanelCollider != null && cleaningPanelCollider.Raycast(ray, out RaycastHit hit, 250f))
+        {
+            if (TryGetOverlayUv(hit.point, out uv) || TryGetFallbackUv(hit.point, out uv))
+            {
+                worldPoint = hit.point;
+                normal = GetOverlayTransform() != null ? GetOverlayTransform().forward : hit.normal;
+                return true;
+            }
         }
 
         return false;
@@ -447,7 +447,14 @@ public class SolarPanelCleaningMinigame : MonoBehaviour
     {
         uv = Vector2.zero;
 
-        Transform surface = cleaningSurfaceTransform != null ? cleaningSurfaceTransform : cleaningPanelCollider.transform;
+        Transform surface = cleaningSurfaceTransform != null
+            ? cleaningSurfaceTransform
+            : cleaningPanelCollider != null ? cleaningPanelCollider.transform : null;
+        if (surface == null)
+        {
+            return false;
+        }
+
         Vector3 surfaceLocalPoint = surface.InverseTransformPoint(worldPoint);
         float u = surfaceLocalPoint.x + 0.5f;
         float v = surfaceLocalPoint.y + 0.5f;
@@ -460,7 +467,7 @@ public class SolarPanelCleaningMinigame : MonoBehaviour
             u = colliderLocal.x / panelWidth + 0.5f;
             v = colliderLocal.y / panelHeight + 0.5f;
         }
-        else if (cleaningSurfaceTransform != null && cleaningSurfaceTransform != dirtOverlayRenderer.transform)
+        else if (cleaningSurfaceTransform != null && (dirtOverlayRenderer == null || cleaningSurfaceTransform != dirtOverlayRenderer.transform))
         {
             float panelWidth = Mathf.Max(fallbackPanelSize.x, 0.0001f);
             float panelHeight = Mathf.Max(fallbackPanelSize.y, 0.0001f);

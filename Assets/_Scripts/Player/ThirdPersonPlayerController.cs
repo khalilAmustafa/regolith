@@ -1,4 +1,5 @@
 using UnityEngine;
+using UnityEngine.Serialization;
 
 // Apollo-inspired, root-motion-driven third-person controller.
 // Faster but still moon-like:
@@ -29,6 +30,23 @@ public class ThirdPersonPlayerController : MonoBehaviour
     [SerializeField] private float gravity = -1.62f;
     [SerializeField] private float groundedStickSpeed = -0.75f;
 
+    [Header("Lunar Jump")]
+    [SerializeField] private float jumpHeight = 1.35f;
+    [FormerlySerializedAs("forwardJumpRootScale")]
+    [SerializeField] private float jumpForwardBoost = 1.20f;
+    [SerializeField] private float airMoveMultiplier = 1.10f;
+    [SerializeField] private float airControl = 0.65f;
+    [SerializeField] private float coyoteTime = 0.12f;
+    [SerializeField] private float jumpBufferTime = 0.12f;
+    [SerializeField] private float jumpTakeoffNormalizedTime = 0.18f;
+    [SerializeField] private float maxAirHorizontalSpeed = 3.25f;
+    [SerializeField] private float postTakeoffGroundIgnoreTime = 0.08f;
+    [SerializeField] private bool debugJump;
+
+    [Header("Falling Animation")]
+    [Tooltip("Drop below the highest airborne point (meters) before the falling animation plays. Filters out bumps, steps and slopes; jumps bypass this check.")]
+    [SerializeField] private float fallAnimationMinDrop = 0.5f;
+
     [Header("Root Motion")]
     [SerializeField] private bool useRootMotion = true;
 
@@ -38,7 +56,6 @@ public class ThirdPersonPlayerController : MonoBehaviour
     [Tooltip("Emergency lope root-motion multiplier. Keep below 1.45 for believable lunar movement.")]
     [SerializeField] private float lopeRootScale = 1.28f;
 
-    [SerializeField] private float forwardJumpRootScale = 0.82f;
     [SerializeField] private float hopRootScale = 1.0f;
 
     [Header("Committed Turn Durations (seconds)")]
@@ -72,6 +89,7 @@ public class ThirdPersonPlayerController : MonoBehaviour
     private static readonly int GroundedHash = Animator.StringToHash("Grounded");
     private static readonly int VerticalSpeedHash = Animator.StringToHash("VerticalSpeed");
     private static readonly int AirborneTimeHash = Animator.StringToHash("AirborneTime");
+    private static readonly int FallingHash = Animator.StringToHash("Falling");
 
     private static readonly int HopTrig = Animator.StringToHash("Hop");
     private static readonly int ForwardJumpTrig = Animator.StringToHash("ForwardJump");
@@ -97,6 +115,12 @@ public class ThirdPersonPlayerController : MonoBehaviour
     private float verticalSpeed;
     private bool isGrounded;
     private float airborneTime;
+    private float lastGroundedTime;
+    private float jumpBufferCounter;
+    private bool jumpedThisFrame;
+    private bool wasGroundedLastFrame;
+    private Vector3 airHorizontalVelocity;
+    private float airbornePeakHeight;
 
     private bool isCommitted;
     private CommittedAction committedAction = CommittedAction.None;
@@ -104,6 +128,12 @@ public class ThirdPersonPlayerController : MonoBehaviour
     private bool committedStateEntered;
     private float committedFallbackTimer;
     private float currentRootScale = 1f;
+    private bool pendingJump;
+    private bool pendingMovingJump;
+    private bool jumpTakeoffPerformed;
+    private bool warnedMissingJumpEvent;
+    private bool landingReported;
+    private float ignoreGroundedUntilTime;
 
     private bool isTurning;
     private Quaternion turnTargetRotation;
@@ -129,13 +159,30 @@ public class ThirdPersonPlayerController : MonoBehaviour
             cameraTransform = Camera.main.transform;
         }
 
+        airbornePeakHeight = transform.position.y;
         UpdateGrounded();
+    }
+
+    private void OnValidate()
+    {
+        jumpHeight = Mathf.Max(0.1f, jumpHeight);
+        jumpForwardBoost = Mathf.Max(0f, jumpForwardBoost);
+        airMoveMultiplier = Mathf.Max(0f, airMoveMultiplier);
+        airControl = Mathf.Clamp01(airControl);
+        coyoteTime = Mathf.Max(0f, coyoteTime);
+        jumpBufferTime = Mathf.Max(0f, jumpBufferTime);
+        jumpTakeoffNormalizedTime = Mathf.Clamp01(jumpTakeoffNormalizedTime);
+        maxAirHorizontalSpeed = Mathf.Max(jumpForwardBoost, maxAirHorizontalSpeed);
+        postTakeoffGroundIgnoreTime = Mathf.Max(0f, postTakeoffGroundIgnoreTime);
+        fallAnimationMinDrop = Mathf.Max(0.05f, fallAnimationMinDrop);
     }
 
     private void Update()
     {
         UpdateGrounded();
+        DetectLanding();
         ReadInput();
+        UpdateJumpBuffer();
 
         if (isCommitted)
         {
@@ -149,6 +196,8 @@ public class ThirdPersonPlayerController : MonoBehaviour
         UpdateVertical();
         UpdateAnimatorParameters();
         SyncDebug();
+        wasGroundedLastFrame = isGrounded;
+        jumpedThisFrame = false;
     }
 
     public void ApplyRootMotion(Vector3 deltaPosition, Quaternion deltaRotation)
@@ -160,8 +209,14 @@ public class ThirdPersonPlayerController : MonoBehaviour
 
         float locomotionScale = Mathf.Lerp(walkRootScale, lopeRootScale, Mathf.Clamp01(speedParam));
         float finalRootScale = isCommitted ? currentRootScale : locomotionScale;
+        if (!isGrounded)
+        {
+            finalRootScale *= airMoveMultiplier;
+        }
 
         Vector3 motion = new Vector3(deltaPosition.x, 0f, deltaPosition.z) * finalRootScale;
+        UpdateAirHorizontalVelocity();
+        motion += airHorizontalVelocity * Time.deltaTime;
         motion.y = verticalSpeed * Time.deltaTime;
 
         characterController.Move(motion);
@@ -179,7 +234,7 @@ public class ThirdPersonPlayerController : MonoBehaviour
 
     private void UpdateGrounded()
     {
-        isGrounded =
+        bool detectedGrounded =
             groundCheck != null &&
             Physics.CheckSphere(
                 groundCheck.position,
@@ -188,21 +243,43 @@ public class ThirdPersonPlayerController : MonoBehaviour
                 QueryTriggerInteraction.Ignore
             );
 
+        isGrounded = Time.time >= ignoreGroundedUntilTime && detectedGrounded;
+
         if (isGrounded)
         {
             airborneTime = 0f;
+            lastGroundedTime = Time.time;
+            airbornePeakHeight = transform.position.y;
         }
         else
         {
             airborneTime += Time.deltaTime;
+            airbornePeakHeight = Mathf.Max(airbornePeakHeight, transform.position.y);
         }
+    }
+
+    private bool IsFallingForAnimation()
+    {
+        if (isGrounded || verticalSpeed >= 0f)
+        {
+            return false;
+        }
+
+        if (jumpTakeoffPerformed)
+        {
+            return true;
+        }
+
+        float dropFromPeak = airbornePeakHeight - transform.position.y;
+        return dropFromPeak >= fallAnimationMinDrop;
     }
 
     private void UpdateVertical()
     {
-        if (isGrounded)
+        if (isGrounded && !jumpedThisFrame && !jumpTakeoffPerformed)
         {
             verticalSpeed = groundedStickSpeed;
+            airHorizontalVelocity = Vector3.zero;
         }
         else
         {
@@ -230,9 +307,9 @@ public class ThirdPersonPlayerController : MonoBehaviour
         bool released = !hasInput && prevHasInput;
         prevHasInput = hasInput;
 
-        if (isGrounded && Input.GetButtonDown("Jump"))
+        if (CanConsumeBufferedJump())
         {
-            StartCommitted(hasInput ? CommittedAction.ForwardJump : CommittedAction.Hop);
+            RequestJump(hasInput);
             return;
         }
 
@@ -291,7 +368,7 @@ public class ThirdPersonPlayerController : MonoBehaviour
                 break;
 
             case CommittedAction.ForwardJump:
-                currentRootScale = forwardJumpRootScale;
+                currentRootScale = jumpForwardBoost;
                 committedStateHash = ForwardJumpState;
                 FireTrigger(ForwardJumpTrig);
                 break;
@@ -330,6 +407,8 @@ public class ThirdPersonPlayerController : MonoBehaviour
 
     private void UpdateCommittedAction()
     {
+        bool jumpAction = committedAction == CommittedAction.Hop || committedAction == CommittedAction.ForwardJump;
+
         if (isTurning)
         {
             transform.rotation = Quaternion.RotateTowards(
@@ -351,6 +430,17 @@ public class ThirdPersonPlayerController : MonoBehaviour
             {
                 committedStateEntered = true;
 
+                if (pendingJump && !jumpTakeoffPerformed && current.normalizedTime >= jumpTakeoffNormalizedTime)
+                {
+                    if (!warnedMissingJumpEvent)
+                    {
+                        warnedMissingJumpEvent = true;
+                        LogJump("Jump animation event missing; using normalized-time fallback takeoff.");
+                    }
+
+                    PerformJumpTakeoff("normalized-time fallback");
+                }
+
                 if (current.normalizedTime >= 0.90f)
                 {
                     ended = true;
@@ -358,13 +448,32 @@ public class ThirdPersonPlayerController : MonoBehaviour
             }
             else if (committedStateEntered)
             {
+                if (pendingJump && !jumpTakeoffPerformed)
+                {
+                    CancelPendingJump("jump animation exited before takeoff");
+                }
+
                 ended = true;
             }
+        }
+        else if (pendingJump && !jumpTakeoffPerformed)
+        {
+            PerformJumpTakeoff("missing animator immediate fallback");
         }
 
         if (!ended && committedFallbackTimer > 3f)
         {
+            if (pendingJump && !jumpTakeoffPerformed)
+            {
+                CancelPendingJump("jump animation timed out before takeoff");
+            }
+
             ended = true;
+        }
+
+        if (jumpAction && jumpTakeoffPerformed && !isGrounded)
+        {
+            ended = false;
         }
 
         if (ended)
@@ -381,12 +490,151 @@ public class ThirdPersonPlayerController : MonoBehaviour
         committedAction = CommittedAction.None;
         isTurning = false;
         currentRootScale = 1f;
+        pendingJump = false;
 
         if (ending == CommittedAction.Stop)
         {
             speedParam = 0f;
             requireInputRelease = true;
         }
+    }
+
+    private void UpdateJumpBuffer()
+    {
+        if (Input.GetButtonDown("Jump"))
+        {
+            jumpBufferCounter = jumpBufferTime;
+            LogJump("Jump input buffered.");
+            return;
+        }
+
+        if (jumpBufferCounter > 0f)
+        {
+            jumpBufferCounter -= Time.deltaTime;
+        }
+    }
+
+    private bool CanConsumeBufferedJump()
+    {
+        return jumpBufferCounter > 0f
+            && !jumpedThisFrame
+            && Time.time - lastGroundedTime <= coyoteTime;
+    }
+
+    private void ConsumeJumpBuffer()
+    {
+        jumpBufferCounter = 0f;
+        lastGroundedTime = float.NegativeInfinity;
+    }
+
+    private void RequestJump(bool movingJump)
+    {
+        if (pendingJump || jumpTakeoffPerformed)
+        {
+            LogJump("Jump request ignored because a jump is already pending or airborne.");
+            return;
+        }
+
+        pendingJump = true;
+        pendingMovingJump = movingJump;
+        jumpTakeoffPerformed = false;
+        landingReported = false;
+
+        LogJump(movingJump ? "Forward jump requested; waiting for animation takeoff." : "Hop requested; waiting for animation takeoff.");
+        StartCommitted(movingJump ? CommittedAction.ForwardJump : CommittedAction.Hop);
+    }
+
+    public void AnimationJumpTakeoff()
+    {
+        LogJump("AnimationJumpTakeoff event received.");
+        PerformJumpTakeoff("animation event");
+    }
+
+    private void PerformJumpTakeoff(string source)
+    {
+        if (!pendingJump)
+        {
+            LogJump($"Takeoff ignored from {source}; no jump is pending.");
+            return;
+        }
+
+        if (jumpTakeoffPerformed)
+        {
+            LogJump($"Takeoff ignored from {source}; jump already took off.");
+            return;
+        }
+
+        bool stillAllowed = isCommitted
+            || isGrounded
+            || Time.time - lastGroundedTime <= coyoteTime;
+        if (!stillAllowed)
+        {
+            CancelPendingJump($"takeoff from {source} failed coyote/ground check");
+            return;
+        }
+
+        verticalSpeed = Mathf.Sqrt(2f * Mathf.Abs(gravity) * Mathf.Max(0.01f, jumpHeight));
+        jumpedThisFrame = true;
+        jumpTakeoffPerformed = true;
+        pendingJump = false;
+        isGrounded = false;
+        ignoreGroundedUntilTime = Time.time + postTakeoffGroundIgnoreTime;
+        ConsumeJumpBuffer();
+
+        if (!pendingMovingJump || desiredDirection.sqrMagnitude <= 0.01f)
+        {
+            airHorizontalVelocity = Vector3.zero;
+            LogJump($"Jump takeoff applied from {source}. verticalSpeed={verticalSpeed:0.###}");
+            return;
+        }
+
+        Vector3 boostDirection = desiredDirection.normalized;
+        airHorizontalVelocity = Vector3.ClampMagnitude(boostDirection * jumpForwardBoost, maxAirHorizontalSpeed);
+        LogJump($"Jump takeoff applied from {source}. verticalSpeed={verticalSpeed:0.###}, airBoost={airHorizontalVelocity.magnitude:0.###}");
+    }
+
+    private void CancelPendingJump(string reason)
+    {
+        if (!pendingJump)
+        {
+            return;
+        }
+
+        pendingJump = false;
+        pendingMovingJump = false;
+        jumpTakeoffPerformed = false;
+        LogJump("Jump cancelled/interrupted: " + reason);
+    }
+
+    private void UpdateAirHorizontalVelocity()
+    {
+        if (isGrounded)
+        {
+            airHorizontalVelocity = Vector3.zero;
+            return;
+        }
+
+        if (desiredDirection.sqrMagnitude <= 0.01f || airControl <= 0f)
+        {
+            airHorizontalVelocity = Vector3.ClampMagnitude(airHorizontalVelocity, maxAirHorizontalSpeed);
+            return;
+        }
+
+        Vector3 controlledVelocity = airHorizontalVelocity + desiredDirection.normalized * (airControl * Time.deltaTime);
+        airHorizontalVelocity = Vector3.ClampMagnitude(controlledVelocity, maxAirHorizontalSpeed);
+    }
+
+    private void DetectLanding()
+    {
+        if (!isGrounded || wasGroundedLastFrame || !jumpTakeoffPerformed || landingReported)
+        {
+            return;
+        }
+
+        jumpTakeoffPerformed = false;
+        landingReported = true;
+        airHorizontalVelocity = Vector3.zero;
+        LogJump("Landing detected.");
     }
 
     private void FireTrigger(int trigger)
@@ -417,6 +665,7 @@ public class ThirdPersonPlayerController : MonoBehaviour
         animator.SetBool(GroundedHash, isGrounded);
         animator.SetFloat(VerticalSpeedHash, verticalSpeed);
         animator.SetFloat(AirborneTimeHash, airborneTime);
+        animator.SetBool(FallingHash, IsFallingForAnimation());
     }
 
     private Vector3 GetCameraRelativeDirection(Vector2 input)
@@ -478,6 +727,14 @@ public class ThirdPersonPlayerController : MonoBehaviour
         debugSpeedParam = speedParam;
         debugAirborneTime = airborneTime;
         debugCommittedAction = isCommitted ? committedAction.ToString() : "None";
+    }
+
+    private void LogJump(string message)
+    {
+        if (debugJump)
+        {
+            Debug.Log("[ThirdPersonPlayerController Jump] " + message, this);
+        }
     }
 
     private void OnDrawGizmosSelected()

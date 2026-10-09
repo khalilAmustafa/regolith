@@ -96,21 +96,19 @@ public class SolarCleaningCameraFollower : MonoBehaviour
         localFocus = Vector2.zero;
         Ray ray = cleaningCamera.ScreenPointToRay(mousePosition);
 
+        Plane overlayPlane = new Plane(dirtOverlay.forward, dirtOverlay.position);
+        if (overlayPlane.Raycast(ray, out float distance)
+            && TryWorldPointToOverlayLocal(ray.GetPoint(distance), out localFocus))
+        {
+            return true;
+        }
+
         if (cleaningPanelCollider != null && cleaningPanelCollider.Raycast(ray, out RaycastHit hit, 250f))
         {
-            if (TryWorldPointToOverlayLocal(hit.point, out localFocus))
-            {
-                return true;
-            }
+            return TryWorldPointToOverlayLocal(hit.point, out localFocus);
         }
 
-        Plane overlayPlane = new Plane(dirtOverlay.forward, dirtOverlay.position);
-        if (!overlayPlane.Raycast(ray, out float distance))
-        {
-            return false;
-        }
-
-        return TryWorldPointToOverlayLocal(ray.GetPoint(distance), out localFocus);
+        return false;
     }
 
     private bool TryWorldPointToOverlayLocal(Vector3 worldPoint, out Vector2 localFocus)

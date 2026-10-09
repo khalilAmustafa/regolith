@@ -9,7 +9,7 @@ public class PlayerInteractionController : MonoBehaviour
     private readonly Collider[] overlapResults = new Collider[MaxOverlapResults];
 
     [SerializeField] private PlayerSurvivalResources playerResources;
-    [SerializeField] private float interactionScanRadius = 5f;
+    [SerializeField] private float interactionScanRadius = 3f;
 
     private IInteractable currentInteractable;
 
@@ -119,7 +119,7 @@ public class PlayerInteractionController : MonoBehaviour
     {
         nearbyInteractables.Clear();
 
-        float radius = interactionScanRadius > 0f ? interactionScanRadius : 5f;
+        float radius = interactionScanRadius > 0f ? interactionScanRadius : 3f;
         Vector3 scanCenter = transform.position + Vector3.up;
         CharacterController characterController = GetComponent<CharacterController>();
         if (characterController != null)

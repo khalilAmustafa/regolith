@@ -4,6 +4,7 @@ using UnityEditor;
 using UnityEditor.SceneManagement;
 using UnityEngine;
 using UnityEngine.SceneManagement;
+using UnityEngine.UI;
 
 public static class MicrometeoriteOpeningCinematicSetupUtility
 {
@@ -14,6 +15,9 @@ public static class MicrometeoriteOpeningCinematicSetupUtility
     private const string PreferredRockTexturePath = "Assets/_External/moon/Models/Rocks/rock-00-8-grey-white-rock-models-with-lods/source/rock_00/rock_00/Textures/rock_00_2k.png";
     private const string RockMaterialPath = "Assets/_Materials/Damage/Micrometeorite_DarkRock_Mat.mat";
     private const string CenteredRockMeshPath = "Assets/_Generated/Micrometeorite_Visible_SingleRock.asset";
+    private const string ImpactAudioClipPath = "Assets/_Audio/Explosion_MuffledBoom.wav";
+    private const string AstronautModelPath = "Assets/_External/astronaut/source/astronaught_3_1.fbx";
+    private const string KnockdownAstronautName = "Impact_Astronaut_Knockdown";
 
     [MenuItem(MenuPath)]
     public static void SetupMicrometeoriteOpeningCinematic()
@@ -42,6 +46,9 @@ public static class MicrometeoriteOpeningCinematicSetupUtility
         Camera asteroidFollowCamera = CreateOrUpdateCamera("Camera_AsteroidFollow", startPoint.position, impactPoint.position, 36f);
         Camera impactCamera = CreateOrUpdateImpactCamera(habitatBounds, impactPoint.position);
         GameObject impactFX = CreateOrUpdateImpactFx(impactPoint);
+        ImpactScreenFlash screenFlash = CreateOrUpdateImpactScreenFlash();
+        GameObject knockdownAstronaut = CreateOrUpdateKnockdownAstronaut(impactPoint, startPoint);
+        Rigidbody knockdownRigidbody = knockdownAstronaut != null ? knockdownAstronaut.GetComponent<Rigidbody>() : null;
 
         GameObject controllerObject = GameObject.Find(ControllerName);
         if (controllerObject == null)
@@ -67,14 +74,27 @@ public static class MicrometeoriteOpeningCinematicSetupUtility
         cinematic.impactCamera = impactCamera;
         cinematic.mainGameplayCamera = Camera.main;
         cinematic.impactFX = impactFX;
-        cinematic.impactAudio = impactPoint.GetComponent<AudioSource>();
         cinematic.habitatDamageVisualState = damageState;
+        cinematic.screenFlash = screenFlash;
+        cinematic.impactAudio = damageState != null && damageState.impactAudio != null
+            ? damageState.impactAudio
+            : impactPoint.GetComponent<AudioSource>();
+        cinematic.knockdownAstronaut = knockdownAstronaut;
+        cinematic.knockdownRigidbody = knockdownRigidbody;
         cinematic.startDelay = 1.5f;
         cinematic.travelDuration = 2.0f;
         cinematic.cameraSwitchDistance = 5f;
         cinematic.postImpactHoldTime = 1.5f;
+        cinematic.flashPeakAlpha = 1f;
+        cinematic.flashHoldTime = 0.08f;
+        cinematic.flashFadeOutTime = 0.25f;
         cinematic.followCameraLocalOffset = new Vector3(2.3f, 0.65f, -2.3f);
         cinematic.xAxisSpinDegreesPerSecond = 35f;
+        cinematic.knockdownSpawnOffset = new Vector3(0f, 0.25f, 0f);
+        cinematic.knockdownBackOffset = 0.75f;
+        cinematic.knockdownImpulseForce = 4.5f;
+        cinematic.knockdownUpwardImpulse = 1.6f;
+        cinematic.knockdownTorqueForce = 2.5f;
         cinematic.playOnStart = true;
         cinematic.debugKey = KeyCode.I;
 
@@ -88,6 +108,10 @@ public static class MicrometeoriteOpeningCinematicSetupUtility
         asteroidFollowCamera.enabled = false;
         impactCamera.enabled = false;
         impactFX.SetActive(false);
+        if (knockdownAstronaut != null)
+        {
+            knockdownAstronaut.SetActive(false);
+        }
 
         EditorUtility.SetDirty(cinematic);
         EditorSceneManager.MarkSceneDirty(SceneManager.GetActiveScene());
@@ -101,6 +125,8 @@ public static class MicrometeoriteOpeningCinematicSetupUtility
             "- Camera_AsteroidFollow assigned: yes\n" +
             "- Camera_ImpactView assigned: yes\n" +
             "- ImpactFX_Dust assigned: yes\n" +
+            "- ImpactFlashOverlay assigned: " + (screenFlash != null ? "yes" : "no") + "\n" +
+            "- Impact_Astronaut_Knockdown assigned: " + (knockdownAstronaut != null ? "yes" : "no") + "\n" +
             "- HabitatDamageVisualState assigned: " + (damageState != null ? "yes" : "no") + "\n" +
             "- Gathering animation untouched: yes");
     }
@@ -133,6 +159,11 @@ public static class MicrometeoriteOpeningCinematicSetupUtility
             {
                 state.concretePatchObject = patch.gameObject;
             }
+        }
+
+        if (state.crackObject != null)
+        {
+            state.impactAudio = CreateOrUpdateImpactAudio(state.crackObject);
         }
 
         return state;
@@ -534,13 +565,222 @@ public static class MicrometeoriteOpeningCinematicSetupUtility
         if (audio == null)
         {
             audio = Undo.AddComponent<AudioSource>(impactPoint.gameObject);
-            audio.playOnAwake = false;
-            audio.spatialBlend = 1f;
-            audio.volume = 0.75f;
+        }
+
+        Undo.RecordObject(audio, "Configure impact audio");
+        audio.clip = AssetDatabase.LoadAssetAtPath<AudioClip>(ImpactAudioClipPath);
+        audio.playOnAwake = false;
+        audio.spatialBlend = 1f;
+        audio.volume = 0.75f;
+        EditorUtility.SetDirty(audio);
+
+        if (audio.clip == null)
+        {
+            Debug.LogWarning("Impact audio clip was not found at " + ImpactAudioClipPath + ".");
         }
 
         fx.SetActive(false);
         return fx;
+    }
+
+    private static ImpactScreenFlash CreateOrUpdateImpactScreenFlash()
+    {
+        GameObject canvasObject = GameObject.Find("ImpactFlashCanvas");
+        if (canvasObject == null)
+        {
+            canvasObject = new GameObject("ImpactFlashCanvas", typeof(RectTransform), typeof(Canvas), typeof(CanvasScaler), typeof(GraphicRaycaster));
+            Undo.RegisterCreatedObjectUndo(canvasObject, "Create impact flash canvas");
+        }
+        else
+        {
+            Undo.RegisterFullObjectHierarchyUndo(canvasObject, "Update impact flash canvas");
+        }
+
+        Canvas canvas = canvasObject.GetComponent<Canvas>();
+        canvas.renderMode = RenderMode.ScreenSpaceOverlay;
+        canvas.sortingOrder = 32767;
+
+        CanvasScaler scaler = canvasObject.GetComponent<CanvasScaler>();
+        scaler.uiScaleMode = CanvasScaler.ScaleMode.ScaleWithScreenSize;
+        scaler.referenceResolution = new Vector2(1920f, 1080f);
+
+        GameObject overlay = GameObject.Find("ImpactFlashOverlay");
+        if (overlay == null)
+        {
+            overlay = new GameObject("ImpactFlashOverlay", typeof(RectTransform), typeof(CanvasRenderer), typeof(Image), typeof(ImpactScreenFlash));
+            Undo.RegisterCreatedObjectUndo(overlay, "Create impact flash overlay");
+            overlay.transform.SetParent(canvasObject.transform, false);
+        }
+        else
+        {
+            Undo.RegisterFullObjectHierarchyUndo(overlay, "Update impact flash overlay");
+            if (overlay.transform.parent != canvasObject.transform)
+            {
+                overlay.transform.SetParent(canvasObject.transform, false);
+            }
+        }
+
+        RectTransform rectTransform = overlay.GetComponent<RectTransform>();
+        rectTransform.anchorMin = Vector2.zero;
+        rectTransform.anchorMax = Vector2.one;
+        rectTransform.offsetMin = Vector2.zero;
+        rectTransform.offsetMax = Vector2.zero;
+
+        Image image = overlay.GetComponent<Image>();
+        if (image == null)
+        {
+            image = Undo.AddComponent<Image>(overlay);
+        }
+
+        image.color = new Color(1f, 1f, 1f, 0f);
+        image.raycastTarget = false;
+
+        ImpactScreenFlash flash = overlay.GetComponent<ImpactScreenFlash>();
+        if (flash == null)
+        {
+            flash = Undo.AddComponent<ImpactScreenFlash>(overlay);
+        }
+
+        EditorUtility.SetDirty(canvasObject);
+        EditorUtility.SetDirty(canvas);
+        EditorUtility.SetDirty(scaler);
+        EditorUtility.SetDirty(image);
+        EditorUtility.SetDirty(flash);
+        EditorUtility.SetDirty(overlay);
+        return flash;
+    }
+
+    private static GameObject CreateOrUpdateKnockdownAstronaut(Transform impactPoint, Transform startPoint)
+    {
+        GameObject existing = GameObject.Find(KnockdownAstronautName);
+        if (existing != null)
+        {
+            Undo.DestroyObjectImmediate(existing);
+        }
+
+        GameObject astronautAsset = AssetDatabase.LoadAssetAtPath<GameObject>(AstronautModelPath);
+        if (astronautAsset == null)
+        {
+            Debug.LogWarning("Knockdown astronaut model was not found at " + AstronautModelPath + ".");
+            return null;
+        }
+
+        GameObject astronaut = PrefabUtility.InstantiatePrefab(astronautAsset, SceneManager.GetActiveScene()) as GameObject;
+        if (astronaut == null)
+        {
+            astronaut = UnityEngine.Object.Instantiate(astronautAsset);
+        }
+
+        Undo.RegisterCreatedObjectUndo(astronaut, "Create knockdown astronaut");
+        astronaut.name = KnockdownAstronautName;
+        astronaut.transform.SetPositionAndRotation(
+            CalculateKnockdownSpawnPosition(impactPoint, startPoint),
+            Quaternion.LookRotation(CalculateImpactDirection(impactPoint, startPoint), Vector3.up));
+        astronaut.transform.localScale = Vector3.one * 0.15f;
+
+        foreach (Animator animator in astronaut.GetComponentsInChildren<Animator>(true))
+        {
+            animator.applyRootMotion = false;
+            animator.enabled = true; // Keep enabled — ImpactAstronautRagdoll manages it at runtime
+            EditorUtility.SetDirty(animator);
+        }
+
+        foreach (MonoBehaviour behaviour in astronaut.GetComponentsInChildren<MonoBehaviour>(true))
+        {
+            if (behaviour == null)
+            {
+                continue;
+            }
+
+            string typeName = behaviour.GetType().Name;
+            if (typeName == "RootMotionRelay" || typeName == "PlayerAnimationEventRelay")
+            {
+                Undo.DestroyObjectImmediate(behaviour);
+            }
+        }
+
+        foreach (Collider collider in astronaut.GetComponentsInChildren<Collider>(true))
+        {
+            Undo.DestroyObjectImmediate(collider);
+        }
+
+        CapsuleCollider capsule = astronaut.GetComponent<CapsuleCollider>();
+        if (capsule == null)
+        {
+            capsule = Undo.AddComponent<CapsuleCollider>(astronaut);
+        }
+
+        capsule.height = 2f;
+        capsule.radius = 0.45f;
+        capsule.center = new Vector3(0f, 1f, 0f);
+        capsule.direction = 1;
+        capsule.isTrigger = false;
+
+        Rigidbody body = astronaut.GetComponent<Rigidbody>();
+        if (body == null)
+        {
+            body = Undo.AddComponent<Rigidbody>(astronaut);
+        }
+
+        body.mass = 80f;
+        body.linearDamping = 0.2f;
+        body.angularDamping = 0.35f;
+        body.collisionDetectionMode = CollisionDetectionMode.ContinuousDynamic;
+        body.interpolation = RigidbodyInterpolation.Interpolate;
+        body.isKinematic = true;
+        body.useGravity = true;
+
+        // Add the ragdoll controller component
+        ImpactAstronautRagdoll ragdoll = astronaut.GetComponent<ImpactAstronautRagdoll>();
+        if (ragdoll == null)
+        {
+            ragdoll = Undo.AddComponent<ImpactAstronautRagdoll>(astronaut);
+        }
+        EditorUtility.SetDirty(ragdoll);
+
+        astronaut.SetActive(false);
+        EditorUtility.SetDirty(astronaut);
+        EditorUtility.SetDirty(capsule);
+        EditorUtility.SetDirty(body);
+        return astronaut;
+    }
+
+    private static Vector3 CalculateKnockdownSpawnPosition(Transform impactPoint, Transform startPoint)
+    {
+        return impactPoint.position - CalculateImpactDirection(impactPoint, startPoint) * 0.75f + new Vector3(0f, 0.25f, 0f);
+    }
+
+    private static Vector3 CalculateImpactDirection(Transform impactPoint, Transform startPoint)
+    {
+        Vector3 direction = impactPoint.position - startPoint.position;
+        direction.y = 0f;
+        return direction.sqrMagnitude > 0.01f ? direction.normalized : Vector3.forward;
+    }
+
+    private static AudioSource CreateOrUpdateImpactAudio(GameObject impactObject)
+    {
+        AudioSource audio = impactObject.GetComponent<AudioSource>();
+        if (audio == null)
+        {
+            audio = Undo.AddComponent<AudioSource>(impactObject);
+        }
+        else
+        {
+            Undo.RecordObject(audio, "Configure impact audio");
+        }
+
+        audio.clip = AssetDatabase.LoadAssetAtPath<AudioClip>(ImpactAudioClipPath);
+        audio.playOnAwake = false;
+        audio.spatialBlend = 1f;
+        audio.volume = 0.75f;
+        EditorUtility.SetDirty(audio);
+
+        if (audio.clip == null)
+        {
+            Debug.LogWarning("Impact audio clip was not found at " + ImpactAudioClipPath + ".");
+        }
+
+        return audio;
     }
 
     private static Transform GetOrCreateChildTransform(string name)

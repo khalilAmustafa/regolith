@@ -13,6 +13,10 @@ public class MicrometeoriteOpeningCinematic : MonoBehaviour
     public GameObject impactFX;
     public AudioSource impactAudio;
     public HabitatDamageVisualState habitatDamageVisualState;
+    public ImpactScreenFlash screenFlash;
+    public ImpactCrackController impactCrackController;
+    public GameObject knockdownAstronaut;
+    public Rigidbody knockdownRigidbody;
 
     [Header("Timing")]
     public float startDelay = 1.5f;
@@ -27,8 +31,20 @@ public class MicrometeoriteOpeningCinematic : MonoBehaviour
     public float impactShakeDuration = 0.28f;
     public float impactShakeMagnitude = 0.13f;
 
+    [Header("Impact Flash")]
+    public float flashPeakAlpha = 1f;
+    public float flashHoldTime = 0.08f;
+    public float flashFadeOutTime = 0.25f;
+
     [Header("Asteroid Motion")]
     public float xAxisSpinDegreesPerSecond = 35f;
+
+    [Header("Knockdown Astronaut")]
+    public Vector3 knockdownSpawnOffset = new Vector3(0f, 0.25f, 0f);
+    public float knockdownBackOffset = 0.75f;
+    public float knockdownImpulseForce = 4.5f;
+    public float knockdownUpwardImpulse = 1.6f;
+    public float knockdownTorqueForce = 2.5f;
 
     private MonoBehaviour playerControllerToDisable;
     private MonoBehaviour gameplayCameraControllerToDisable;
@@ -142,6 +158,11 @@ public class MicrometeoriteOpeningCinematic : MonoBehaviour
             micrometeorite.gameObject.SetActive(false);
         }
 
+        if (screenFlash != null)
+        {
+            screenFlash.PlayFlash(flashPeakAlpha, flashHoldTime, flashFadeOutTime);
+        }
+
         if (impactFX != null)
         {
             impactFX.transform.position = asteroidImpactPoint.position;
@@ -153,9 +174,20 @@ public class MicrometeoriteOpeningCinematic : MonoBehaviour
             }
         }
 
+        if (impactCrackController != null)
+        {
+            impactCrackController.ShowCrack();
+        }
+
+        TriggerKnockdownAstronaut();
+
         if (impactAudio != null)
         {
             impactAudio.Play();
+        }
+        else if (habitatDamageVisualState != null && habitatDamageVisualState.impactAudio != null)
+        {
+            habitatDamageVisualState.impactAudio.Play();
         }
 
         if (habitatDamageVisualState != null)
@@ -222,10 +254,17 @@ public class MicrometeoriteOpeningCinematic : MonoBehaviour
             impactFX.SetActive(false);
         }
 
+        if (impactCrackController != null)
+        {
+            impactCrackController.HideCrack();
+        }
+
         if (micrometeorite != null)
         {
             micrometeorite.gameObject.SetActive(false);
         }
+
+        ResetKnockdownAstronaut();
 
         SetCameraEnabled(asteroidFollowCamera, false);
         SetCameraEnabled(impactCamera, false);
@@ -308,6 +347,80 @@ public class MicrometeoriteOpeningCinematic : MonoBehaviour
         return renderer != null ? renderer.bounds.center : micrometeorite.position;
     }
 
+    private void ResetKnockdownAstronaut()
+    {
+        if (knockdownRigidbody != null)
+        {
+            knockdownRigidbody.isKinematic = true;
+            knockdownRigidbody.linearVelocity = Vector3.zero;
+            knockdownRigidbody.angularVelocity = Vector3.zero;
+        }
+
+        if (knockdownAstronaut != null)
+        {
+            // Keep the astronaut visible and standing
+            knockdownAstronaut.SetActive(true);
+
+            ImpactAstronautRagdoll ragdoll = knockdownAstronaut.GetComponent<ImpactAstronautRagdoll>();
+            if (ragdoll != null)
+            {
+                ragdoll.ResetRagdoll();
+            }
+        }
+    }
+
+    private void TriggerKnockdownAstronaut()
+    {
+        if (knockdownAstronaut == null)
+        {
+            return;
+        }
+
+        // Do NOT reposition — the astronaut is already standing where it was placed.
+        // Just trigger the death physics in place.
+        ImpactAstronautRagdoll ragdoll = knockdownAstronaut.GetComponent<ImpactAstronautRagdoll>();
+        if (ragdoll != null)
+        {
+            ragdoll.TriggerImpactDeath(asteroidImpactPoint != null ? asteroidImpactPoint.position : knockdownAstronaut.transform.position);
+            return;
+        }
+
+        // Fallback: original single-body physics if ragdoll component is missing
+        foreach (Animator animator in knockdownAstronaut.GetComponentsInChildren<Animator>(true))
+        {
+            animator.enabled = false;
+        }
+
+        if (knockdownRigidbody == null)
+        {
+            knockdownRigidbody = knockdownAstronaut.GetComponent<Rigidbody>();
+        }
+
+        if (knockdownRigidbody == null)
+        {
+            return;
+        }
+
+        knockdownRigidbody.isKinematic = false;
+        knockdownRigidbody.linearVelocity = Vector3.zero;
+        knockdownRigidbody.angularVelocity = Vector3.zero;
+        Vector3 incomingDirection = GetIncomingDirection();
+        knockdownRigidbody.AddForce(incomingDirection * knockdownImpulseForce + Vector3.up * knockdownUpwardImpulse, ForceMode.Impulse);
+        knockdownRigidbody.AddTorque(Vector3.Cross(Vector3.up, incomingDirection).normalized * knockdownTorqueForce, ForceMode.Impulse);
+    }
+
+    private Vector3 GetIncomingDirection()
+    {
+        if (asteroidStartPoint == null || asteroidImpactPoint == null)
+        {
+            return transform.forward.sqrMagnitude > 0.01f ? transform.forward.normalized : Vector3.forward;
+        }
+
+        Vector3 direction = asteroidImpactPoint.position - asteroidStartPoint.position;
+        direction.y = 0f;
+        return direction.sqrMagnitude > 0.01f ? direction.normalized : Vector3.forward;
+    }
+
     private void DisableGameplayInputAndCamera()
     {
         GameObject player = GameObject.FindGameObjectWithTag("Player");
@@ -375,6 +488,21 @@ public class MicrometeoriteOpeningCinematic : MonoBehaviour
         if (habitatDamageVisualState == null)
         {
             habitatDamageVisualState = FindAnyObjectByType<HabitatDamageVisualState>();
+        }
+
+        if (screenFlash == null)
+        {
+            screenFlash = FindAnyObjectByType<ImpactScreenFlash>();
+        }
+
+        if (screenFlash == null)
+        {
+            screenFlash = ImpactScreenFlash.CreateDefaultOverlay();
+        }
+
+        if (impactCrackController == null)
+        {
+            impactCrackController = FindAnyObjectByType<ImpactCrackController>();
         }
     }
 
